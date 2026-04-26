@@ -1,0 +1,77 @@
+# ============================================================
+# VetPro — .gitignore
+# ============================================================
+
+# ---------- Configuración sensible (NUNCA subir) ----------
+includes/config.php
+includes/config_tokens.php
+.env
+.env.*
+!.env.example
+
+# ---------- Base de datos / dumps ----------
+*.sql
+*.sql.gz
+*.sqlite
+*.sqlite3
+database.sql
+vetpro.sql
+
+# ---------- Uploads y archivos generados por usuarios ----------
+public/uploads/*
+!public/uploads/.gitkeep
+!public/uploads/index.php
+
+# ---------- Logs ----------
+*.log
+logs/
+error_log
+php_errorlog
+debug.log
+
+# ---------- Archivos temporales / hash de prueba ----------
+hash.php
+test.php
+phpinfo.php
+info.php
+tmp/
+temp/
+cache/
+*.bak
+*.swp
+*.tmp
+
+# ---------- Dependencias (por si añades Composer/npm) ----------
+/vendor/
+/node_modules/
+composer.lock
+package-lock.json
+yarn.lock
+
+# ---------- IDE / Editores ----------
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.history/
+.fleet/
+nbproject/
+
+# ---------- Sistema operativo ----------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# ---------- Otros ----------
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+backup/
+backups/
