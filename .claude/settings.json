@@ -2,7 +2,14 @@
   "permissions": {
     "allow": [
       "Read(//c/laragon/www/api-sunat-laravel/**)",
-      "Read(//c/laragon/www/api-sunat-laravel/routes/**)"
+      "Read(//c/laragon/www/api-sunat-laravel/routes/**)",
+      "Read(//c/laragon/www/DentalSys/pages/**)",
+      "Read(//c/laragon/www/techrepair/**)"
+    ],
+    "additionalDirectories": [
+      "c:\\laragon\\www\\DentalSys\\migrations",
+      "c:\\laragon\\www\\DentalSys\\pages",
+      "c:\\laragon\\www\\mecanica_pro_apache\\backend\\src\\utils"
     ]
   }
 }
