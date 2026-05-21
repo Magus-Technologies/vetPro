@@ -263,6 +263,7 @@ body {
 @media(max-width:768px){
     .left-panel{display:none}
     .right-panel{width:100%;min-width:unset;padding:32px 24px}
+    .mobile-brand{display:flex!important}
 }
 </style>
 </head>
@@ -324,6 +325,24 @@ body {
 <!-- Panel derecho con formulario -->
 <div class="right-panel">
     <div style="width:100%;max-width:360px">
+
+        <!-- Logo para móvil (oculto en desktop) -->
+        <div class="mobile-brand" style="display:none;flex-direction:column;align-items:center;margin-bottom:28px">
+            <?php if($cfg_logo): ?>
+            <img src="<?= UPLOADS_URL . '/' . htmlspecialchars($cfg_logo) ?>"
+                 alt="<?= htmlspecialchars($cfg_nombre) ?>"
+                 style="width:72px;height:72px;object-fit:contain;border-radius:16px;background:linear-gradient(135deg,#1FA463,#0E3B2E);padding:6px;box-shadow:0 4px 16px rgba(31,164,99,.3);margin-bottom:12px"
+                 onerror="this.style.display='none';document.getElementById('mob-icon').style.display='flex'">
+            <div id="mob-icon" style="display:none;width:72px;height:72px;background:linear-gradient(135deg,#1FA463,#0E3B2E);border-radius:16px;align-items:center;justify-content:center;font-size:36px;margin-bottom:12px;box-shadow:0 4px 16px rgba(31,164,99,.3)">🐾</div>
+            <?php else: ?>
+            <div style="width:72px;height:72px;background:linear-gradient(135deg,#1FA463,#0E3B2E);border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:36px;margin-bottom:12px;box-shadow:0 4px 16px rgba(31,164,99,.3)">🐾</div>
+            <?php endif; ?>
+            <div style="font-size:26px;font-weight:800;color:#1A1F2C;letter-spacing:-0.5px">
+                <?= htmlspecialchars($parts[0]??$cfg_nombre) ?><span style="color:#1FA463"><?= isset($parts[1])?' '.htmlspecialchars($parts[1]):'' ?></span>
+            </div>
+            <div style="font-size:12px;color:#657176;margin-top:2px;letter-spacing:1px">Sistema de Gestión Veterinaria</div>
+        </div>
+
         <div class="login-title">Inicia sesión</div>
         <div class="login-sub">Accede a tu cuenta</div>
 
