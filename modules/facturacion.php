@@ -71,10 +71,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (empty($items_ok)) {
             $msg = 'error_items';
         } else {
+            // Convención: precio_unitario YA INCLUYE IGV.
+            // $subtotal aquí es la suma bruta (con IGV). Extraemos base imponible e IGV.
             $descuento = (float)($_POST['descuento'] ?? 0);
-            $base  = $subtotal - $descuento;
-            $igv   = round($base * 0.18, 2);
-            $total = round($base + $igv, 2);
+            $bruto     = round($subtotal - $descuento, 2);     // total a cobrar (con IGV)
+            $base      = round($bruto / 1.18, 2);               // base imponible (sin IGV)
+            $igv       = round($bruto - $base, 2);              // IGV extraído
+            $total     = $bruto;
+            // En BD: `ventas.subtotal` guarda la base imponible (fiscal), no el bruto.
+            $subtotal  = $base;
 
             $st = $db->prepare("INSERT INTO ventas (sede_id,cliente_id,mascota_id,usuario_id,tipo_comprobante,serie,numero,subtotal,igv,descuento,total,metodo_pago,estado,notas) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
             $st->execute([
@@ -413,7 +418,7 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
         <div class="form-group mt-1"><label class="form-label">Notas</label><input class="form-input" name="notas" placeholder="Observaciones del comprobante"></div>
       </div>
       <div style="background:var(--teal-l);border:1.5px solid var(--teal);border-radius:12px;padding:16px">
-        <div class="flex justify-between text-sm mb-2"><span class="text-muted">Subtotal:</span><span id="tot-sub">S/. 0.00</span></div>
+        <div class="flex justify-between text-sm mb-2"><span class="text-muted">Op. Gravadas:</span><span id="tot-sub">S/. 0.00</span></div>
         <div class="flex justify-between text-sm mb-2"><span class="text-muted">Descuento:</span><span id="tot-desc" style="color:var(--red)">-S/. 0.00</span></div>
         <div class="flex justify-between text-sm mb-2"><span class="text-muted">IGV (18%):</span><span id="tot-igv">S/. 0.00</span></div>
         <div style="border-top:1.5px solid var(--teal);padding-top:10px;margin-top:4px" class="flex justify-between"><span style="font-size:16px;font-weight:800;color:var(--teal-d)">Total:</span><span id="tot-total" style="font-size:20px;font-weight:800;color:var(--teal-d)">S/. 0.00</span></div>
@@ -488,7 +493,7 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
 
   <!-- TOTALES -->
   <div style="text-align:right;border-top:1px solid var(--border);padding-top:12px;margin-bottom:14px">
-    <div class="text-sm text-muted mb-1">Subtotal: S/. <?= number_format($venta_detalle['subtotal'],2) ?></div>
+    <div class="text-sm text-muted mb-1">Op. Gravadas: S/. <?= number_format($venta_detalle['subtotal'],2) ?></div>
     <?php if(($venta_detalle['descuento']??0)>0): ?>
     <div class="text-sm text-muted mb-1" style="color:var(--red)">Descuento: -S/. <?= number_format($venta_detalle['descuento'],2) ?></div>
     <?php endif; ?>
@@ -927,17 +932,22 @@ function calcSubtotal(idx) {
 }
 
 function calcTotal() {
-  var sub = 0;
+  // Convención: el precio que el usuario ingresa YA INCLUYE IGV.
+  // sumaBruta = suma de (cantidad × precio_con_igv)
+  // total     = sumaBruta - descuento  (lo que paga el cliente)
+  // base      = total / 1.18            (op. gravadas, sin IGV)
+  // igv       = total - base
+  var sumaBruta = 0;
   document.querySelectorAll('.item-row').forEach(row => {
     var qty   = parseFloat(row.querySelector('[name="item_qty[]"]')?.value  || 1);
     var price = parseFloat(row.querySelector('[name="item_precio[]"]')?.value || 0);
-    sub += qty * price;
+    sumaBruta += qty * price;
   });
   var desc  = parseFloat(document.getElementById('inp-desc')?.value || 0);
-  var base  = sub - desc;
-  var igv   = base * 0.18;
-  var total = base + igv;
-  document.getElementById('tot-sub').textContent   = 'S/. ' + sub.toFixed(2);
+  var total = sumaBruta - desc;
+  var base  = total / 1.18;
+  var igv   = total - base;
+  document.getElementById('tot-sub').textContent   = 'S/. ' + base.toFixed(2);
   document.getElementById('tot-desc').textContent  = '-S/. ' + desc.toFixed(2);
   document.getElementById('tot-igv').textContent   = 'S/. ' + igv.toFixed(2);
   document.getElementById('tot-total').textContent = 'S/. ' + total.toFixed(2);

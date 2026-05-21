@@ -203,7 +203,7 @@ table.items tr:last-child td{border-bottom:none}
 
     <!-- TOTALES -->
     <div class="totales">
-      <div class="tot-row"><span>Subtotal:</span><span>S/. <?= number_format($v['subtotal'],2) ?></span></div>
+      <div class="tot-row"><span>Op. Gravadas:</span><span>S/. <?= number_format($v['subtotal'],2) ?></span></div>
       <?php if(($v['descuento']??0)>0): ?><div class="tot-row"><span>Descuento:</span><span style="color:#dc2626">-S/. <?= number_format($v['descuento'],2) ?></span></div><?php endif; ?>
       <div class="tot-row"><span>IGV (18%):</span><span>S/. <?= number_format($v['igv'],2) ?></span></div>
       <div class="tot-total"><span>Total:</span><span>S/. <?= number_format($v['total'],2) ?></span></div>

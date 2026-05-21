@@ -99,7 +99,7 @@ table.t td.c{text-align:center}
   <div class="sep"></div>
 
   <!-- TOTALES -->
-  <div class="tot-row"><span>SUBTOTAL:</span></div>
+  <div class="tot-row"><span>OP. GRAVADAS:</span></div>
   <div class="tot-row" style="justify-content:flex-end"><span>PEN <?= number_format($v['subtotal']-($v['descuento']??0),2) ?></span></div>
   <div class="tot-row"><span>IGV (18%):</span></div>
   <div class="tot-row" style="justify-content:flex-end"><span>PEN <?= number_format($v['igv'],2) ?></span></div>
