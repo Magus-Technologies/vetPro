@@ -1,6 +1,7 @@
 <?php
 $page = 'configuracion'; $pageTitle = 'Configuración';
 require_once __DIR__ . '/../includes/header.php';
+require_once __DIR__ . '/../includes/config_sunat.php';
 if (!hasRole(['admin'])) {
     echo '<div class="alert alert-danger">🔒 Solo administradores.</div>';
     require_once __DIR__.'/../includes/footer.php'; exit;
@@ -449,7 +450,6 @@ document.head.appendChild(style);
 <?php elseif($tab==='sunat'): ?>
 <!-- ═══ SUNAT ═══ -->
 <?php
-require_once __DIR__ . '/../includes/config_sunat.php';
 $cert_subido = sunatCertSubido();
 $cert_fecha  = sunatCertFecha();
 ?>
