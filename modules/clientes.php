@@ -480,7 +480,7 @@ if (!empty($msg) && str_starts_with($msg,'import_ok:')) {
       <button type="submit" class="btn">Buscar</button>
     </form>
     <!-- Exportar -->
-    <a href="?p=clientes&action=exportar_excel" class="btn btn-sm btn-ghost" style="color:var(--success);border-color:var(--success)" title="Exportar clientes a Excel">
+    <a href="<?= BASE_URL ?>/api/clientes_excel.php?action=exportar" class="btn btn-sm btn-ghost" style="color:var(--success);border-color:var(--success)" title="Exportar clientes a Excel">
       📥 Exportar Excel
     </a>
     <!-- Importar -->
@@ -506,7 +506,7 @@ if (!empty($msg) && str_starts_with($msg,'import_ok:')) {
         Descarga la plantilla Excel, rellénala con tus clientes y súbela en el paso 2.
         Columnas: <code>Nombre · DNI · RUC · Teléfono · Email · Dirección · Cómo nos conoció · Notas</code>
       </div>
-      <a href="?p=clientes&action=plantilla_excel" class="btn btn-sm" style="color:var(--success);border-color:var(--success)">
+      <a href="<?= BASE_URL ?>/api/clientes_excel.php?action=plantilla" class="btn btn-sm" style="color:var(--success);border-color:var(--success)">
         ⬇️ Descargar plantilla
       </a>
     </div>
