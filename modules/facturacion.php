@@ -42,8 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $sede_id_actual = getSede();
         $serie = getSerieParaSede($db, $tipo, $sede_id_actual);
 
-        $st = $db->prepare("SELECT COALESCE(MAX(numero),0)+1 FROM ventas WHERE serie=?");
-        $st->execute([$serie]); $numero = (int)$st->fetchColumn();
+        $numero = siguienteNumeroSerie($db, $serie);
 
         // ── Procesar ítems con campos planos (más robusto que arrays anidados) ──
         $items_ok = [];
@@ -287,7 +286,7 @@ try { $_todas_sedes = $db->query("SELECT id FROM sedes")->fetchAll(PDO::FETCH_CO
 foreach ($_todas_sedes as $_s) {
     foreach (['boleta','factura','ticket'] as $_tc) {
         $_serie = getSerieParaSede($db, $_tc, $_s);
-        try { $_st=$db->prepare("SELECT COALESCE(MAX(numero),0)+1 FROM ventas WHERE serie=?"); $_st->execute([$_serie]); $_sig=(int)$_st->fetchColumn(); } catch(Exception $e){ $_sig=1; }
+        $_sig = siguienteNumeroSerie($db, $_serie);
         $_series_fac[$_s][$_tc] = ['serie'=>$_serie,'numero'=>str_pad($_sig,6,'0',STR_PAD_LEFT)];
     }
 }

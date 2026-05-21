@@ -212,3 +212,26 @@ function formatDate($date) {
     $meses = ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
     return $dias[date('w',$ts)] . ', ' . date('d',$ts) . ' de ' . $meses[(int)date('n',$ts)] . ' ' . date('Y',$ts);
 }
+
+/**
+ * Devuelve el próximo correlativo a emitir para una serie.
+ * Respeta el "correlativo inicial" configurado en `configuracion.correlativo_inicio_{SERIE}`
+ * (usado por empresas que migran desde otro sistema).
+ *
+ * Fórmula:  proximo = max(MAX(ventas.numero) + 1, correlativo_inicio_configurado)
+ */
+function siguienteNumeroSerie(PDO $db, string $serie): int {
+    try {
+        $st = $db->prepare("SELECT COALESCE(MAX(numero),0)+1 FROM ventas WHERE serie=?");
+        $st->execute([$serie]);
+        $siguienteReal = (int)$st->fetchColumn();
+
+        $st = $db->prepare("SELECT valor FROM configuracion WHERE clave=?");
+        $st->execute(['correlativo_inicio_' . $serie]);
+        $inicio = (int)$st->fetchColumn();
+
+        return $inicio > 0 ? max($siguienteReal, $inicio) : $siguienteReal;
+    } catch (Exception $e) {
+        return 1;
+    }
+}
