@@ -845,11 +845,14 @@ var _cliSel   = null;
 
 // ── SERIE Y NÚMERO ──
 function actualizarSerieNum() {
-    var tipo = document.getElementById('sel-tipo').value;
-    var d = SERIES[tipo];
+    var sel = document.getElementById('sel-tipo');
+    if (!sel) return;  // No estamos en el form de "Nueva venta"
+    var d = (typeof SERIES !== 'undefined') ? SERIES[sel.value] : null;
     if (!d) return;
-    document.getElementById('disp-serie').value  = d.serie;
-    document.getElementById('disp-numero').value = d.numero;
+    var serieEl  = document.getElementById('disp-serie');
+    var numeroEl = document.getElementById('disp-numero');
+    if (serieEl)  serieEl.value  = d.serie;
+    if (numeroEl) numeroEl.value = d.numero;
 }
 
 // ── BUSCADOR CLIENTES ──
