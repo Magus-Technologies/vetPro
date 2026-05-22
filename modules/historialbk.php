@@ -564,57 +564,6 @@ $tipo_labels=['consulta'=>'Consulta general','control'=>'Control','emergencia'=>
 .hc-res-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px}
 .hc-res-row:last-child{border-bottom:none}
 .hc-empty-small{text-align:center;padding:32px 16px;color:var(--text3)}
-
-/* ── MÓVIL: Historia Clínica ── */
-@media(max-width:768px) {
-  /* Layout en columna única */
-  .hc-layout {
-    grid-template-columns:1fr !important;
-    height:auto !important;
-    overflow:visible !important;
-    border-radius:12px !important;
-  }
-  .hc-layout.with-mascota,
-  .hc-layout.no-mascota {
-    grid-template-columns:1fr !important;
-  }
-
-  /* Ocultar panel izquierdo de paciente en móvil */
-  .hc-left { display:none !important; }
-
-  /* Panel centro: lista de consultas */
-  .hc-center {
-    border-right:none !important;
-    border-bottom:1px solid var(--border);
-    max-height:420px;
-  }
-
-  /* Panel derecho: detalle */
-  .hc-right {
-    max-height:none !important;
-    border-left:none !important;
-  }
-
-  /* Vitales en 2 cols en móvil */
-  .hc-vitales { grid-template-columns:1fr 1fr !important; }
-
-  /* Detalle grid en 1 col */
-  .hc-det-grid { grid-template-columns:1fr !important; }
-
-  /* Archivo grid en 3 cols */
-  .arch-grid { grid-template-columns:repeat(3,1fr) !important; }
-
-  /* Tabs en wrap */
-  .hc-tabs-pills { gap:4px; }
-  .hc-tab-pill { font-size:11px !important; padding:5px 10px !important; }
-
-  /* Barra bottom en columna */
-  .hc-bottom-bar { flex-direction:column; gap:6px; }
-  .hc-bottom-bar .btn { width:100%; justify-content:center; }
-
-  /* Header de nueva atención */
-  .hc-nueva-header { flex-direction:column !important; gap:8px; }
-}
 </style>
 
 <?php if($msg==='ok'||($_GET['msg']??'')==='ok'): ?>

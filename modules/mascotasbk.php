@@ -127,9 +127,8 @@ if ($action==='ver' && isset($_GET['id'])) {
 .mas-field:last-child { border-bottom:none; }
 .mas-field-label { font-size:12px; color:var(--text3); font-weight:500; }
 .mas-field-val { font-size:12px; font-weight:600; color:var(--text); text-align:right; }
-.mas-tabs { display:flex; gap:2px; border-bottom:2px solid var(--border); margin-bottom:16px; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
-.mas-tabs::-webkit-scrollbar { display:none; }
-.mas-tab { padding:9px 16px; border-radius:8px 8px 0 0; font-size:12px; font-weight:600; color:var(--text3); cursor:pointer; border:none; background:none; white-space:nowrap; flex-shrink:0; transition:all .15s; margin-bottom:-2px; border-bottom:2px solid transparent; }
+.mas-tabs { display:flex; gap:2px; border-bottom:2px solid var(--border); margin-bottom:16px; overflow-x:auto; }
+.mas-tab { padding:9px 16px; border-radius:8px 8px 0 0; font-size:12px; font-weight:600; color:var(--text3); cursor:pointer; border:none; background:none; white-space:nowrap; transition:all .15s; margin-bottom:-2px; border-bottom:2px solid transparent; }
 .mas-tab.active { color:var(--primary); border-bottom-color:var(--primary); background:transparent; }
 .mas-tab:hover { color:var(--text2); }
 .mas-tab-content { display:none; } .mas-tab-content.active { display:block; }
@@ -142,19 +141,6 @@ if ($action==='ver' && isset($_GET['id'])) {
 .resumen-med-stat:last-child { border-bottom:none; }
 .nota-card { background:#fefce8; border:1px solid #fde68a; border-radius:10px; padding:12px 14px; font-size:12px; color:#78350f; line-height:1.6; }
 @media(max-width:1100px) { .mas-profile { grid-template-columns:240px 1fr; } .mas-right { display:none; } }
-@media(max-width:768px) {
-  .mas-profile { grid-template-columns:1fr !important; gap:10px !important; }
-  .mas-right { display:block !important; overflow:visible !important; min-width:0 !important; }
-  .mas-left { gap:10px !important; }
-  .mas-quick-header { flex-wrap:wrap !important; gap:10px !important; padding:14px !important; }
-  .mas-btns { width:100% !important; display:flex !important; gap:6px !important; }
-  .mas-btns a, .mas-btns button { flex:1 !important; justify-content:center !important; font-size:11px !important; padding:7px 4px !important; text-align:center !important; }
-  .mas-photo-wrap { height:180px !important; }
-  /* FIX TABS — scroll horizontal sin corte */
-  .mas-tabs { display:flex !important; flex-wrap:nowrap !important; overflow-x:scroll !important; -webkit-overflow-scrolling:touch !important; scrollbar-width:none !important; width:100% !important; box-sizing:border-box !important; }
-  .mas-tabs::-webkit-scrollbar { display:none !important; }
-  .mas-tab { flex-shrink:0 !important; white-space:nowrap !important; font-size:11px !important; padding:7px 10px !important; }
-}
 </style>
 
 <?php if($msg==='success'): ?><div class="alert alert-success mb-2"><span class="alert-icon">✅</span>Mascota actualizada correctamente.</div><?php endif; ?>
@@ -167,12 +153,12 @@ if ($action==='ver' && isset($_GET['id'])) {
 </div>
 
 <!-- HEADER RÁPIDO -->
-<div class="mas-quick-header" style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-  <div style="width:56px;height:56px;border-radius:12px;overflow:hidden;flex-shrink:0;background:var(--bg3);display:flex;align-items:center;justify-content:center">
-    <?php if($foto_url): ?><img src="<?= $foto_url ?>" style="width:100%;height:100%;object-fit:cover"><?php else: ?><span style="font-size:28px"><?= $especie_icons[$m['especie']]??'🐾' ?></span><?php endif; ?>
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:16px">
+  <div style="width:52px;height:52px;border-radius:12px;overflow:hidden;flex-shrink:0;background:var(--bg3);display:flex;align-items:center;justify-content:center">
+    <?php if($foto_url): ?><img src="<?= $foto_url ?>" style="width:100%;height:100%;object-fit:cover"><?php else: ?><span style="font-size:26px"><?= $especie_icons[$m['especie']]??'🐾' ?></span><?php endif; ?>
   </div>
-  <div style="flex:1;min-width:160px">
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+  <div class="flex-1">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="font-size:20px;font-weight:800;color:var(--text)"><?= clean($m['nombre']) ?></span>
       <span style="font-size:16px"><?= $m['sexo']==='macho'?'♂️':'♀️' ?></span>
       <span class="badge <?= $m['estado']==='activo'?'b-success':'b-danger' ?>"><?= ucfirst($m['estado']) ?></span>
@@ -181,11 +167,12 @@ if ($action==='ver' && isset($_GET['id'])) {
       <?= ucfirst($m['especie']) ?><?= $m['raza']?" · ".clean($m['raza']):'' ?> <?= $edad?" · $edad":'' ?> <?= $m['peso']?" · ".clean($m['peso'])." kg":'' ?>
     </div>
   </div>
-  <div class="mas-btns flex gap-2" style="position:relative">
+  <div class="flex gap-2" style="position:relative">
     <a href="<?= BASE_URL ?>/index.php?p=mascotas&action=editar&id=<?= $m['id'] ?>" class="btn btn-ghost btn-sm">✏️ Editar</a>
     <a href="<?= BASE_URL ?>/index.php?p=historial&mascota_id=<?= $m['id'] ?>" class="btn btn-primary btn-sm">🏥 Historia Clínica</a>
     <button class="btn btn-ghost btn-sm" id="btnMenu<?= $m['id'] ?>"
             onclick="toggleMasMenu(<?= $m['id'] ?>, event)" style="padding:8px 12px">⋯</button>
+    <!-- Dropdown fuera del flujo del botón -->
     <div id="dropMenu<?= $m['id'] ?>"
          style="display:none;position:absolute;top:100%;right:0;margin-top:4px;background:var(--bg2);border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.12);z-index:500;min-width:190px;padding:5px;animation:slideUp .15s ease">
       <a href="<?= BASE_URL ?>/index.php?p=citas&action=nueva" class="mas-dmenu-item">📅 Agendar cita</a>
@@ -687,10 +674,10 @@ $st->execute($params); $mascotas=$st->fetchAll();
     <div class="page-title">🐾 Mascotas</div>
     <div class="page-desc"><?= count($mascotas) ?> pacientes activos</div>
   </div>
-  <div class="flex gap-2 items-center" style="flex-wrap:wrap">
+  <div class="flex gap-2 items-center">
     <!-- Buscador con autocomplete -->
-    <div style="position:relative;flex:1;min-width:200px" id="masSearchWrap">
-      <div style="display:flex;align-items:center;background:var(--bg2);border:1.5px solid var(--border);border-radius:var(--r-full);padding:0 14px;gap:8px;transition:border-color .2s"
+    <div style="position:relative" id="masSearchWrap">
+      <div style="display:flex;align-items:center;background:var(--bg2);border:1.5px solid var(--border);border-radius:var(--r-full);padding:0 14px;gap:8px;transition:border-color .2s;width:280px"
            id="masSearchBox">
         <span style="color:var(--text3);font-size:14px;flex-shrink:0">🔍</span>
         <input id="masSearchInput" type="text"
@@ -709,16 +696,16 @@ $st->execute($params); $mascotas=$st->fetchAll();
         display:none;position:absolute;top:calc(100% + 6px);left:0;right:0;
         background:var(--bg2);border:1px solid var(--border);border-radius:12px;
         box-shadow:0 8px 32px rgba(0,0,0,.12);z-index:500;max-height:320px;
-        overflow-y:auto;min-width:200px;
+        overflow-y:auto;min-width:280px;
       "></div>
     </div>
-    <select class="form-input" name="especie" id="masEspecieSel" style="width:auto;min-width:100px;flex-shrink:0" onchange="masFilterEspecie(this.value)">
+    <select class="form-input" name="especie" id="masEspecieSel" style="width:130px" onchange="masFilterEspecie(this.value)">
       <option value="">Todas</option>
       <?php foreach($especie_labels as $k=>$v): ?>
       <option value="<?= $k ?>" <?= $esp_f===$k?'selected':'' ?>><?= $v ?></option>
       <?php endforeach; ?>
     </select>
-    <a href="?p=mascotas&action=nuevo" class="btn btn-primary" style="flex-shrink:0;white-space:nowrap">＋ Nueva</a>
+    <a href="?p=mascotas&action=nuevo" class="btn btn-primary">＋ Nueva Mascota</a>
   </div>
 </div>
 
