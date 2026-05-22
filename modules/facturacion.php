@@ -71,24 +71,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (empty($items_ok)) {
             $msg = 'error_items';
         } else {
-            // Convención: precio_unitario YA INCLUYE IGV.
-            // $subtotal aquí es la suma bruta (con IGV). Extraemos base imponible e IGV.
-            $descuento = (float)($_POST['descuento'] ?? 0);
-            $bruto     = round($subtotal - $descuento, 2);     // total a cobrar (con IGV)
-            $base      = round($bruto / 1.18, 2);               // base imponible (sin IGV)
-            $igv       = round($bruto - $base, 2);              // IGV extraído
-            $total     = $bruto;
-            // En BD: `ventas.subtotal` guarda la base imponible (fiscal), no el bruto.
-            $subtotal  = $base;
+            // Convención: precio_unitario YA INCLUYE IGV (cuando aplica_igv=1).
+            // Si aplica_igv=0 → exonerado/inafecto: no se desglosa IGV, todo es base.
+            $aplica_igv = isset($_POST['aplica_igv']) && $_POST['aplica_igv'] === '0' ? 0 : 1;
+            $descuento  = (float)($_POST['descuento'] ?? 0);
+            $bruto      = round($subtotal - $descuento, 2);     // lo que se cobra
 
-            $st = $db->prepare("INSERT INTO ventas (sede_id,cliente_id,mascota_id,usuario_id,tipo_comprobante,serie,numero,subtotal,igv,descuento,total,metodo_pago,estado,notas) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+            if ($aplica_igv) {
+                $base  = round($bruto / 1.18, 2);   // op. gravadas
+                $igv   = round($bruto - $base, 2);
+            } else {
+                $base  = $bruto;                    // op. inafectas/exoneradas
+                $igv   = 0.00;
+            }
+            $total    = $bruto;
+            // En BD: `ventas.subtotal` guarda la base (gravada o inafecta según el caso).
+            $subtotal = $base;
+
+            $st = $db->prepare("INSERT INTO ventas (sede_id,cliente_id,mascota_id,usuario_id,tipo_comprobante,serie,numero,subtotal,igv,aplica_igv,descuento,total,metodo_pago,estado,notas) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
             $st->execute([
                 $user['sede_id'] ?? getSede(),
                 $cliente_id,
                 (int)($_POST['mascota_id'] ?? 0) ?: null,
                 $user['id'],
                 $tipo, $serie, $numero,
-                $subtotal, $igv, $descuento, $total,
+                $subtotal, $igv, $aplica_igv, $descuento, $total,
                 $_POST['metodo_pago'] ?? 'efectivo',
                 'pagado',
                 trim($_POST['notas'] ?? '')
@@ -415,12 +422,64 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
       <div class="form-group">
         <label class="form-label">Descuento (S/.)</label>
         <input class="form-input" type="number" step="0.01" name="descuento" id="inp-desc" value="0" min="0" oninput="calcTotal()">
-        <div class="form-group mt-1"><label class="form-label">Notas</label><input class="form-input" name="notas" placeholder="Observaciones del comprobante"></div>
+
+        <!-- Toggle ¿Aplica IGV? -->
+        <label class="form-label mt-2">¿Aplica IGV?</label>
+        <div class="igv-toggle">
+          <label class="igv-opt">
+            <input type="radio" name="aplica_igv" value="1" checked onchange="toggleIgv()">
+            <span class="igv-pill"><span class="igv-ico">✓</span><span>Sí (gravado)</span></span>
+          </label>
+          <label class="igv-opt">
+            <input type="radio" name="aplica_igv" value="0" onchange="toggleIgv()">
+            <span class="igv-pill"><span class="igv-ico">○</span><span>No (exonerado)</span></span>
+          </label>
+        </div>
+        <div id="igv-info" class="mt-2" style="font-size:11.5px;padding:9px 12px;border-radius:8px;background:#e8f8f7;border:1px solid #b8e6e3;color:#0f6b65">
+          ℹ Los precios <strong>incluyen IGV (18%)</strong>. Se desglosa automáticamente en el comprobante.
+        </div>
+        <style>
+          .igv-toggle { display:grid;grid-template-columns:1fr 1fr;gap:6px }
+          .igv-opt { position:relative;cursor:pointer;user-select:none;margin:0 }
+          .igv-opt input { position:absolute;opacity:0;width:0;height:0;pointer-events:none }
+          .igv-pill {
+            display:flex;align-items:center;justify-content:center;gap:6px;
+            padding:8px 10px;border-radius:9px;font-size:12.5px;font-weight:600;
+            background:#f5f7fa;color:#6b7280;
+            border:1.5px solid #d1d5db;
+            transition:all .15s ease;
+            line-height:1;
+          }
+          .igv-ico {
+            width:18px;height:18px;border-radius:50%;
+            display:inline-flex;align-items:center;justify-content:center;
+            background:#fff;color:transparent;
+            border:1.5px solid #9ca3af;
+            font-size:12px;font-weight:900;
+            flex-shrink:0;
+          }
+          .igv-opt:hover .igv-pill { border-color:#1ea8a1;color:#0f6b65;background:#fff }
+          /* === Estado ACTIVO === */
+          .igv-opt input:checked ~ .igv-pill {
+            background:#1ea8a1;
+            color:#ffffff;
+            border-color:#158a83;
+            box-shadow:0 2px 8px rgba(30,168,161,.35);
+          }
+          .igv-opt input:checked ~ .igv-pill .igv-ico {
+            background:#ffffff;
+            color:#1ea8a1;
+            border-color:#ffffff;
+          }
+          .igv-opt input:focus-visible ~ .igv-pill { outline:2px solid #158a83;outline-offset:2px }
+        </style>
+
+        <div class="form-group mt-2"><label class="form-label">Notas</label><input class="form-input" name="notas" placeholder="Observaciones del comprobante"></div>
       </div>
       <div style="background:var(--teal-l);border:1.5px solid var(--teal);border-radius:12px;padding:16px">
-        <div class="flex justify-between text-sm mb-2"><span class="text-muted">Op. Gravadas:</span><span id="tot-sub">S/. 0.00</span></div>
+        <div class="flex justify-between text-sm mb-2"><span class="text-muted" id="lbl-tot-sub">Op. Gravadas:</span><span id="tot-sub">S/. 0.00</span></div>
         <div class="flex justify-between text-sm mb-2"><span class="text-muted">Descuento:</span><span id="tot-desc" style="color:var(--red)">-S/. 0.00</span></div>
-        <div class="flex justify-between text-sm mb-2"><span class="text-muted">IGV (18%):</span><span id="tot-igv">S/. 0.00</span></div>
+        <div class="flex justify-between text-sm mb-2" id="row-tot-igv"><span class="text-muted">IGV (18%):</span><span id="tot-igv">S/. 0.00</span></div>
         <div style="border-top:1.5px solid var(--teal);padding-top:10px;margin-top:4px" class="flex justify-between"><span style="font-size:16px;font-weight:800;color:var(--teal-d)">Total:</span><span id="tot-total" style="font-size:20px;font-weight:800;color:var(--teal-d)">S/. 0.00</span></div>
       </div>
     </div>
@@ -493,11 +552,12 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
 
   <!-- TOTALES -->
   <div style="text-align:right;border-top:1px solid var(--border);padding-top:12px;margin-bottom:14px">
-    <div class="text-sm text-muted mb-1">Op. Gravadas: S/. <?= number_format($venta_detalle['subtotal'],2) ?></div>
+    <?php $_aplica = !isset($venta_detalle['aplica_igv']) || (int)$venta_detalle['aplica_igv']===1; ?>
+    <div class="text-sm text-muted mb-1"><?= $_aplica ? 'Op. Gravadas:' : 'Op. Inafectas:' ?> S/. <?= number_format($venta_detalle['subtotal'],2) ?></div>
     <?php if(($venta_detalle['descuento']??0)>0): ?>
     <div class="text-sm text-muted mb-1" style="color:var(--red)">Descuento: -S/. <?= number_format($venta_detalle['descuento'],2) ?></div>
     <?php endif; ?>
-    <div class="text-sm text-muted mb-1">IGV (18%): S/. <?= number_format($venta_detalle['igv'],2) ?></div>
+    <?php if ($_aplica): ?><div class="text-sm text-muted mb-1">IGV (18%): S/. <?= number_format($venta_detalle['igv'],2) ?></div><?php endif; ?>
     <div style="font-size:22px;font-weight:800;color:var(--teal-d)">Total: S/. <?= number_format($venta_detalle['total'],2) ?></div>
     <div class="text-xs text-muted mt-1">Método: <?= ucfirst(str_replace('_',' ',$venta_detalle['metodo_pago'])) ?></div>
   </div>
@@ -932,11 +992,8 @@ function calcSubtotal(idx) {
 }
 
 function calcTotal() {
-  // Convención: el precio que el usuario ingresa YA INCLUYE IGV.
-  // sumaBruta = suma de (cantidad × precio_con_igv)
-  // total     = sumaBruta - descuento  (lo que paga el cliente)
-  // base      = total / 1.18            (op. gravadas, sin IGV)
-  // igv       = total - base
+  // Convención (aplica_igv=1): el precio del item YA INCLUYE IGV → se desglosa.
+  // Si aplica_igv=0: exonerado/inafecto → no hay desglose, base = total cobrado.
   var sumaBruta = 0;
   document.querySelectorAll('.item-row').forEach(row => {
     var qty   = parseFloat(row.querySelector('[name="item_qty[]"]')?.value  || 1);
@@ -944,13 +1001,33 @@ function calcTotal() {
     sumaBruta += qty * price;
   });
   var desc  = parseFloat(document.getElementById('inp-desc')?.value || 0);
-  var total = sumaBruta - desc;
-  var base  = total / 1.18;
-  var igv   = total - base;
+  var total = Math.max(0, sumaBruta - desc);
+
+  var aplicaIgv = document.querySelector('input[name="aplica_igv"]:checked')?.value === '1';
+  var base, igv;
+  if (aplicaIgv) { base = total / 1.18; igv = total - base; }
+  else           { base = total;        igv = 0; }
+
+  var lblSub = document.getElementById('lbl-tot-sub');
+  if (lblSub) lblSub.textContent = aplicaIgv ? 'Op. Gravadas:' : 'Op. Inafectas:';
+  var rowIgv = document.getElementById('row-tot-igv');
+  if (rowIgv) rowIgv.style.display = aplicaIgv ? '' : 'none';
+
   document.getElementById('tot-sub').textContent   = 'S/. ' + base.toFixed(2);
   document.getElementById('tot-desc').textContent  = '-S/. ' + desc.toFixed(2);
   document.getElementById('tot-igv').textContent   = 'S/. ' + igv.toFixed(2);
   document.getElementById('tot-total').textContent = 'S/. ' + total.toFixed(2);
+}
+
+function toggleIgv() {
+  var aplicaIgv = document.querySelector('input[name="aplica_igv"]:checked')?.value === '1';
+  var info = document.getElementById('igv-info');
+  if (info) {
+    info.innerHTML = aplicaIgv
+      ? 'ℹ Los precios <strong>incluyen IGV (18%)</strong>. Se desglosa automáticamente en el comprobante.'
+      : '🧾 Los precios <strong>NO incluyen IGV</strong>. Se emite como comprobante exonerado/inafecto.';
+  }
+  calcTotal();
 }
 
 function removeItem(btn) {

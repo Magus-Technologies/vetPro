@@ -4,7 +4,9 @@
       "Read(//c/laragon/www/api-sunat-laravel/**)",
       "Read(//c/laragon/www/api-sunat-laravel/routes/**)",
       "Read(//c/laragon/www/DentalSys/pages/**)",
-      "Read(//c/laragon/www/techrepair/**)"
+      "Read(//c/laragon/www/techrepair/**)",
+      "Bash(grep -rn \"Aplica IGV\\\\|aplica_igv\\\\|exonerado\\\\|gravado\\\\|incluyen IGV\" /c/laragon/www/DentalSys/ --include=\"*.php\" 2>/dev/null | head -20)",
+      "Read(//c/laragon/www/DentalSys//**)"
     ],
     "additionalDirectories": [
       "c:\\laragon\\www\\DentalSys\\migrations",

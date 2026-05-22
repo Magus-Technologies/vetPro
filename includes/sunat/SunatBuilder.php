@@ -15,7 +15,8 @@ class SunatBuilder
      */
     public static function buildComprobante(array $venta, array $cliente, array $items): array
     {
-        $tipo = $venta['tipo_comprobante']; // factura | boleta
+        $tipo       = $venta['tipo_comprobante']; // factura | boleta
+        $aplica_igv = !isset($venta['aplica_igv']) || (int)$venta['aplica_igv'] === 1;
 
         return [
             'endpoint'   => SUNAT_ENDPOINT,
@@ -27,7 +28,8 @@ class SunatBuilder
             'fecha_emision' => $venta['fecha'] ?? date('Y-m-d H:i:s'),
             'moneda'     => 'PEN',
             'forma_pago' => 'contado',
-            'detalles'   => self::detalles($items),
+            'aplica_igv' => $aplica_igv,
+            'detalles'   => self::detalles($items, $aplica_igv),
         ];
     }
 
@@ -92,10 +94,11 @@ class SunatBuilder
 
     /**
      * Transforma `venta_items` al formato esperado.
-     * Asume que `precio_unitario` viene CON IGV incluido (el servicio
-     * Greenter divide entre 1.18 internamente).
+     * Cuando $aplica_igv=true, `precio_unitario` viene CON IGV incluido (Greenter
+     * divide entre 1.18 internamente). Cuando $aplica_igv=false, se marca cada
+     * item como inafecto (sin IGV).
      */
-    private static function detalles(array $items): array
+    private static function detalles(array $items, bool $aplica_igv = true): array
     {
         $out = [];
         foreach ($items as $i => $it) {
@@ -104,7 +107,8 @@ class SunatBuilder
                 'unidad'       => 'NIU', // NIU=unidad, ZZ=servicio. NIU funciona para ambos en SUNAT beta.
                 'descripcion'  => $it['descripcion'],
                 'cantidad'     => (float) $it['cantidad'],
-                'precio'       => (float) $it['precio_unitario'], // con IGV
+                'precio'       => (float) $it['precio_unitario'],
+                'tipo_igv'     => $aplica_igv ? 'gravado' : 'inafecto',
             ];
         }
         return $out;

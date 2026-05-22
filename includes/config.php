@@ -4,8 +4,10 @@
 // Auto-detecta entorno LOCAL vs PRODUCCIÓN por hostname
 // ============================================================
 
-$__host    = $_SERVER['HTTP_HOST'] ?? gethostname();
-$__isLocal = (
+$__host      = $_SERVER['HTTP_HOST'] ?? gethostname();
+$__isWindows = DIRECTORY_SEPARATOR === '\\';
+$__isLocal   = (
+    $__isWindows ||
     str_contains($__host, 'localhost') ||
     str_contains($__host, '127.0.0.1') ||
     str_contains($__host, '.test')     ||
