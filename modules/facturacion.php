@@ -88,23 +88,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // En BD: `ventas.subtotal` guarda la base (gravada o inafecta según el caso).
             $subtotal = $base;
 
-            $st = $db->prepare("INSERT INTO ventas (sede_id,cliente_id,mascota_id,usuario_id,tipo_comprobante,serie,numero,subtotal,igv,aplica_igv,descuento,total,metodo_pago,estado,notas) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
-            $st->execute([
-                $user['sede_id'] ?? getSede(),
-                $cliente_id,
-                (int)($_POST['mascota_id'] ?? 0) ?: null,
-                $user['id'],
-                $tipo, $serie, $numero,
-                $subtotal, $igv, $aplica_igv, $descuento, $total,
-                $_POST['metodo_pago'] ?? 'efectivo',
-                'pagado',
-                trim($_POST['notas'] ?? '')
-            ]);
-            $venta_id = (int)$db->lastInsertId();
+            // Transacción atómica: si falla cualquier item, hacemos rollback para evitar
+            // dejar la venta con totales que NO coinciden con sus items en BD.
+            $db->beginTransaction();
+            try {
+                $st = $db->prepare("INSERT INTO ventas (sede_id,cliente_id,mascota_id,usuario_id,tipo_comprobante,serie,numero,subtotal,igv,aplica_igv,descuento,total,metodo_pago,estado,notas) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                $st->execute([
+                    $user['sede_id'] ?? getSede(),
+                    $cliente_id,
+                    (int)($_POST['mascota_id'] ?? 0) ?: null,
+                    $user['id'],
+                    $tipo, $serie, $numero,
+                    $subtotal, $igv, $aplica_igv, $descuento, $total,
+                    $_POST['metodo_pago'] ?? 'efectivo',
+                    'pagado',
+                    trim($_POST['notas'] ?? '')
+                ]);
+                $venta_id = (int)$db->lastInsertId();
 
-            $st2 = $db->prepare("INSERT INTO venta_items (venta_id,tipo,referencia_id,descripcion,cantidad,precio_unitario,subtotal) VALUES (?,?,?,?,?,?,?)");
-            foreach ($items_ok as $it) {
-                $st2->execute([$venta_id, $it['tipo'], $it['ref'], $it['desc'], $it['qty'], $it['precio'], $it['sub']]);
+                $st2 = $db->prepare("INSERT INTO venta_items (venta_id,tipo,referencia_id,descripcion,cantidad,precio_unitario,subtotal) VALUES (?,?,?,?,?,?,?)");
+                foreach ($items_ok as $it) {
+                    $st2->execute([$venta_id, $it['tipo'], $it['ref'], $it['desc'], $it['qty'], $it['precio'], $it['sub']]);
+                }
+                $db->commit();
+            } catch (Throwable $e) {
+                $db->rollBack();
+                throw $e;
             }
 
             // Movimiento de caja
