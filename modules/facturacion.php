@@ -750,14 +750,7 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
                 <a href="?p=facturacion&action=cdr&id=<?= $v['id'] ?>" class="btn btn-xs" title="Descargar CDR">⬇</a>
               <?php endif; ?>
               <?php if($v['estado']==='pagado'): ?>
-              <div style="position:relative" onmouseenter="this.querySelector('.pm').style.display='block'" onmouseleave="this.querySelector('.pm').style.display='none'">
-                <button class="btn btn-xs">🖨️ ▾</button>
-                <div class="pm" style="display:none;position:absolute;top:100%;right:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);z-index:100;min-width:160px;padding:4px">
-                  <a href="<?= BASE_URL ?>/print/comprobante.php?id=<?= $v['id'] ?>&fmt=a4" target="_blank" style="display:flex;align-items:center;gap:8px;padding:8px 12px;text-decoration:none;color:var(--text);font-size:12px;border-radius:6px" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">📄 <div><div>Formato A4</div><div style="font-size:10px;color:var(--text3)">Documento estándar</div></div></a>
-                  <a href="<?= BASE_URL ?>/print/comprobante.php?id=<?= $v['id'] ?>&fmt=voucher" target="_blank" style="display:flex;align-items:center;gap:8px;padding:8px 12px;text-decoration:none;color:var(--text);font-size:12px;border-radius:6px" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">🖨️ <div><div>Voucher 80mm</div><div style="font-size:10px;color:var(--text3)">Ticket impresora</div></div></a>
-                  <a href="<?= BASE_URL ?>/print/ver.php?serie=<?= urlencode($v['serie']) ?>&num=<?= $v['numero'] ?>" target="_blank" style="display:flex;align-items:center;gap:8px;padding:8px 12px;text-decoration:none;color:var(--text);font-size:12px;border-radius:6px" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">🌐 <div><div>Link web</div><div style="font-size:10px;color:var(--text3)">Compartir al cliente</div></div></a>
-                </div>
-              </div>
+              <button type="button" class="btn btn-xs" onclick="togglePrintMenu(this, <?= $v['id'] ?>, '<?= urlencode($v['serie']) ?>', <?= (int)$v['numero'] ?>)">🖨️ ▾</button>
               <?php endif; ?>
             </div>
           </td>
@@ -768,7 +761,68 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
     </table>
   </div>
 </div>
+
+<!-- Menú flotante de impresión (compartido para todas las filas) -->
+<div id="print-menu" style="display:none;position:fixed;background:#fff;border:1px solid #e2e5eb;border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.18);z-index:9999;min-width:220px;padding:6px;font-family:inherit">
+  <a id="pm-a4" href="#" target="_blank" class="pm-item">
+    <span class="pm-ico">📄</span>
+    <div><div style="font-weight:600">Formato A4</div><div class="pm-sub">Documento estándar</div></div>
+  </a>
+  <a id="pm-voucher" href="#" target="_blank" class="pm-item">
+    <span class="pm-ico">🖨️</span>
+    <div><div style="font-weight:600">Voucher 80mm</div><div class="pm-sub">Ticket impresora</div></div>
+  </a>
+  <a id="pm-web" href="#" target="_blank" class="pm-item">
+    <span class="pm-ico">🌐</span>
+    <div><div style="font-weight:600">Link web</div><div class="pm-sub">Compartir al cliente</div></div>
+  </a>
+</div>
+<style>
+  .pm-item { display:flex;align-items:center;gap:10px;padding:9px 12px;text-decoration:none;color:#1a1d23;font-size:12.5px;border-radius:7px;transition:background .12s }
+  .pm-item:hover { background:#f0f2f5 }
+  .pm-ico { font-size:18px;flex-shrink:0;width:24px;text-align:center }
+  .pm-sub { font-size:10.5px;color:#9299a8;margin-top:1px }
+</style>
 <?php endif; ?>
+
+<script>
+// ─── Dropdown de impresión flotante (escapa overflow:hidden de la tabla) ───
+(function(){
+  const menu = document.getElementById('print-menu');
+  if (!menu) return;
+  let openBtn = null;
+
+  window.togglePrintMenu = function(btn, ventaId, serie, numero) {
+    if (openBtn === btn) { hidePrintMenu(); return; }
+    openBtn = btn;
+
+    const base = '<?= BASE_URL ?>';
+    document.getElementById('pm-a4').href      = base + '/print/comprobante.php?id=' + ventaId + '&fmt=a4';
+    document.getElementById('pm-voucher').href = base + '/print/comprobante.php?id=' + ventaId + '&fmt=voucher';
+    document.getElementById('pm-web').href     = base + '/print/ver.php?serie=' + serie + '&num=' + numero;
+
+    // Posicionar bajo el botón, alineado a la derecha
+    menu.style.display = 'block';
+    const r = btn.getBoundingClientRect();
+    const mw = menu.offsetWidth;
+    let left = r.right - mw;
+    if (left < 8) left = 8;
+    if (left + mw > window.innerWidth - 8) left = window.innerWidth - mw - 8;
+    let top = r.bottom + 4;
+    if (top + menu.offsetHeight > window.innerHeight - 8) top = r.top - menu.offsetHeight - 4;
+    menu.style.left = left + 'px';
+    menu.style.top  = top  + 'px';
+  };
+
+  function hidePrintMenu() { menu.style.display = 'none'; openBtn = null; }
+  document.addEventListener('click', e => {
+    if (openBtn && !openBtn.contains(e.target) && !menu.contains(e.target)) hidePrintMenu();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePrintMenu(); });
+  window.addEventListener('resize', hidePrintMenu);
+  window.addEventListener('scroll', hidePrintMenu, true);
+})();
+</script>
 
 <script>
 var SERVICIOS = <?= json_encode(array_values(array_map(fn($s)=>['id'=>(int)$s['id'],'nombre'=>$s['nombre'],'precio'=>(float)$s['precio']], $servicios_sel))) ?>;
