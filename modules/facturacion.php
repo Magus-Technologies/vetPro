@@ -37,12 +37,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // ── GUARDAR VENTA ──
     if ($pa === 'save') {
-        $cliente_id = (int)$_POST['cliente_id'];
+        $cliente_id = (int)($_POST['cliente_id'] ?? 0);
         $tipo  = $_POST['tipo_comprobante'] ?? 'boleta';
         $sede_id_actual = getSede();
         $serie = getSerieParaSede($db, $tipo, $sede_id_actual);
 
         $numero = siguienteNumeroSerie($db, $serie);
+
+        // Si no hay cliente, usamos el cliente "CLIENTES VARIOS" (boleta/ticket).
+        // Para FACTURA siempre debe haber un cliente con RUC válido (regla SUNAT).
+        $save_blocked = false;
+        if ($cliente_id === 0) {
+            if ($tipo === 'factura') {
+                $msg = 'cli_factura_req'; $action = 'nueva'; $save_blocked = true;
+            } else {
+                // Buscar (o crear) el cliente "CLIENTES VARIOS"
+                $st = $db->prepare("SELECT id FROM clientes WHERE nombre='CLIENTES VARIOS' LIMIT 1");
+                $st->execute();
+                $cliente_id = (int)$st->fetchColumn();
+                if ($cliente_id === 0) {
+                    $db->prepare("INSERT INTO clientes (nombre,direccion,telefono,activo) VALUES ('CLIENTES VARIOS','-','-',1)")->execute();
+                    $cliente_id = (int)$db->lastInsertId();
+                }
+            }
+        } elseif ($tipo === 'factura') {
+            // Si el tipo es FACTURA, el cliente debe tener RUC válido (11 dígitos)
+            $st = $db->prepare("SELECT ruc FROM clientes WHERE id=?");
+            $st->execute([$cliente_id]);
+            $ruc = trim((string)$st->fetchColumn());
+            if (strlen($ruc) !== 11) {
+                $msg = 'cli_factura_ruc'; $action = 'nueva'; $save_blocked = true;
+            }
+        }
+        if ($save_blocked) {
+            // No procesamos el resto del bloque save; el form se vuelve a renderizar con $msg.
+            goto end_save_block;
+        }
 
         // ── Procesar ítems con campos planos (más robusto que arrays anidados) ──
         $items_ok = [];
@@ -142,6 +172,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header('Location: '.BASE_URL.'/index.php?p=facturacion&action=ver&id='.$venta_id.'&msg=nuevo'.$msg_extra);
             exit;
         }
+        end_save_block:;
     }
 
     if ($pa === 'anular') {
@@ -296,6 +327,9 @@ $_sunat_msg   = clean($_GET['sunat_msg'] ?? '');
 <?php endif; ?>
 <?php if(($msg??'')==='anulado'): ?><div class="alert alert-warn mb-2">⚠️ Venta anulada.</div><?php endif; ?>
 <?php if(($msg??'')==='cobrado'): ?><div class="alert alert-success mb-2">✅ Pago registrado.</div><?php endif; ?>
+<?php if(($msg??'')==='cli_factura_req'): ?><div class="alert alert-warn mb-2">⚠️ Para emitir una <strong>factura</strong> debes seleccionar un cliente con RUC válido.</div><?php endif; ?>
+<?php if(($msg??'')==='cli_factura_ruc'): ?><div class="alert alert-warn mb-2">⚠️ El cliente seleccionado no tiene <strong>RUC válido</strong>. La factura requiere RUC de 11 dígitos. Edita el cliente o emite una boleta.</div><?php endif; ?>
+<?php if(($msg??'')==='error_items'): ?><div class="alert alert-warn mb-2">⚠️ Debes agregar al menos un ítem con precio mayor a 0.</div><?php endif; ?>
 
 <?php if($action==='nueva'): ?>
 <!-- ════════════════════════════ NUEVA VENTA ════════════════════════════ -->
@@ -322,13 +356,13 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
     <input type="hidden" name="action" value="save">
 
     <!-- CLIENTE + MASCOTA con buscador -->
-    <div class="form-row" style="gap:12px;margin-bottom:12px">
+    <div class="form-row" style="gap:12px;margin-bottom:4px">
       <div class="form-group" style="position:relative">
-        <label class="form-label required">Cliente</label>
-        <input type="text" id="cli-busq" class="form-input" placeholder="🔍 Nombre, DNI o RUC..."
-               autocomplete="off" oninput="buscarCliente(this.value)"
+        <label class="form-label">Cliente <span style="color:var(--text3);font-weight:400">(opcional para boleta / nota de venta)</span></label>
+        <input type="text" id="cli-busq" class="form-input" placeholder="🔍 Buscar por nombre, DNI o RUC..."
+               autocomplete="off" oninput="buscarCliente(this.value)" onfocus="buscarCliente(this.value)"
                onblur="setTimeout(function(){document.getElementById('cli-drop').style.display='none'},200)">
-        <input type="hidden" name="cliente_id" id="cli-id" required>
+        <input type="hidden" name="cliente_id" id="cli-id">
         <div id="cli-drop" style="display:none;position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:400;max-height:220px;overflow-y:auto"></div>
         <div id="cli-sel" style="display:none;margin-top:4px;padding:7px 10px;background:rgba(30,168,161,.1);border-radius:8px;font-size:13px;align-items:center;justify-content:space-between">
           <span id="cli-sel-nom" style="font-weight:600;color:var(--primary-d)"></span>
@@ -337,9 +371,9 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
       </div>
       <div class="form-group" style="position:relative">
         <label class="form-label">Mascota <span style="color:var(--text3);font-weight:400">(opcional)</span></label>
-        <input type="text" id="mas-busq" class="form-input" placeholder="🐾 Buscar mascota..."
-               autocomplete="off" oninput="buscarMascota(this.value)"
-               onblur="setTimeout(function(){document.getElementById('mas-drop').style.display='none'},200)">
+        <input type="text" id="mas-busq" class="form-input" placeholder="🐾 Selecciona primero un cliente"
+               autocomplete="off" oninput="buscarMascota(this.value)" onfocus="buscarMascota('')"
+               onblur="setTimeout(function(){document.getElementById('mas-drop').style.display='none'},200)" disabled>
         <input type="hidden" name="mascota_id" id="mas-id">
         <div id="mas-drop" style="display:none;position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:400;max-height:200px;overflow-y:auto"></div>
         <div id="mas-sel" style="display:none;margin-top:4px;padding:7px 10px;background:var(--bg3);border-radius:8px;font-size:13px;align-items:center;justify-content:space-between">
@@ -347,6 +381,9 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
           <button type="button" onclick="limpiarMascota()" style="background:none;border:none;color:var(--text3);cursor:pointer">✕</button>
         </div>
       </div>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:12px;padding-left:2px">
+      💡 Si dejas el cliente vacío, se emite a nombre de <strong>"CLIENTES VARIOS"</strong> (solo para boleta o nota de venta).
     </div>
 
     <!-- TIPO DOC + SERIE + NÚMERO + CONDICIÓN -->
@@ -858,11 +895,12 @@ function actualizarSerieNum() {
 // ── BUSCADOR CLIENTES ──
 function buscarCliente(val) {
     var drop = document.getElementById('cli-drop');
-    if (!val || val.length < 1) { drop.style.display='none'; return; }
-    var q = val.toLowerCase();
-    var matches = CLIENTES.filter(function(c) {
-        return c.nombre.toLowerCase().indexOf(q)>=0 || (c.dni&&c.dni.indexOf(q)>=0) || (c.ruc&&c.ruc.indexOf(q)>=0);
-    }).slice(0,8);
+    var q = (val || '').toLowerCase();
+    var matches = q
+      ? CLIENTES.filter(function(c) {
+          return c.nombre.toLowerCase().indexOf(q)>=0 || (c.dni&&c.dni.indexOf(q)>=0) || (c.ruc&&c.ruc.indexOf(q)>=0);
+        }).slice(0,8)
+      : CLIENTES.slice(0,8);   // focus sin texto → muestra los primeros 8
     if (!matches.length) { drop.innerHTML='<div style="padding:12px 14px;font-size:12px;color:var(--text3)">Sin resultados</div>'; drop.style.display='block'; return; }
     var html = '';
     matches.forEach(function(c) {
@@ -891,10 +929,24 @@ function seleccionarCliente(c) {
     document.getElementById('cli-sel').style.display  = 'flex';
     document.getElementById('cli-sel-nom').textContent = c.nombre + (c.dni?' · DNI '+c.dni:'') + (c.ruc?' · RUC '+c.ruc:'');
     document.getElementById('cli-busq').style.display = 'none';
-    // Filtrar mascotas
-    document.getElementById('mas-busq').value = '';
-    document.getElementById('mas-id').value   = '';
-    limpiarMascota();
+
+    // Habilitar campo mascota y precargar mascotas del cliente
+    var masBusq = document.getElementById('mas-busq');
+    masBusq.value = '';
+    masBusq.disabled = false;
+    var mascotasCli = MASCOTAS.filter(function(m){ return m.cliente_id == c.id; });
+    if (mascotasCli.length === 1) {
+        // Auto-selección si solo tiene una mascota
+        seleccionarMascota(mascotasCli[0]);
+    } else if (mascotasCli.length > 1) {
+        masBusq.placeholder = '🐾 ' + mascotasCli.length + ' mascota(s) — clic para ver';
+        document.getElementById('mas-id').value = '';
+        limpiarMascota();
+    } else {
+        masBusq.placeholder = '🐾 Este cliente no tiene mascotas';
+        document.getElementById('mas-id').value = '';
+        limpiarMascota();
+    }
 }
 
 function limpiarCliente() {
@@ -903,6 +955,10 @@ function limpiarCliente() {
     document.getElementById('cli-busq').value = '';
     document.getElementById('cli-busq').style.display = '';
     document.getElementById('cli-sel').style.display  = 'none';
+    // Deshabilitar mascota de nuevo
+    var masBusq = document.getElementById('mas-busq');
+    masBusq.disabled = true;
+    masBusq.placeholder = '🐾 Selecciona primero un cliente';
     limpiarMascota();
 }
 
@@ -910,10 +966,11 @@ function limpiarCliente() {
 function buscarMascota(val) {
     var drop = document.getElementById('mas-drop');
     var cliId = document.getElementById('cli-id').value;
-    var q = val.toLowerCase();
+    if (!cliId) { drop.style.display='none'; return; }
+    var q = (val || '').toLowerCase();
     var matches = MASCOTAS.filter(function(m) {
-        var matchNom = m.label.toLowerCase().indexOf(q) >= 0;
-        var matchCli = !cliId || m.cliente_id == cliId;
+        var matchNom = !q || m.label.toLowerCase().indexOf(q) >= 0;
+        var matchCli = m.cliente_id == cliId;
         return matchNom && matchCli;
     }).slice(0,8);
     if (!matches.length) { drop.style.display='none'; return; }
