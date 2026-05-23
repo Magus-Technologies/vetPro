@@ -204,6 +204,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+// ── AGREGAR / ELIMINAR MÉTODO DE PAGO ─────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_metodo_pago') {
+    $nombre = trim($_POST['nombre_metodo'] ?? '');
+    if ($nombre) {
+        $n = 1;
+        while (true) {
+            $ck = "metodo_pago_$n";
+            $st = $db->prepare("SELECT id FROM configuracion WHERE clave=?");
+            $st->execute([$ck]);
+            if (!$st->fetchColumn()) break;
+            $n++;
+        }
+        $db->prepare("INSERT INTO configuracion (clave,valor) VALUES (?,?)")->execute([$ck, $nombre]);
+    }
+    echo json_encode(['ok' => true]); exit;
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'del_metodo_pago') {
+    $idx = (int)($_POST['idx'] ?? 0);
+    $db->prepare("DELETE FROM configuracion WHERE clave=?")->execute(["metodo_pago_$idx"]);
+    echo json_encode(['ok' => true]); exit;
+}
+
+// Cargar métodos de pago desde BD
+$metodos_pago_cfg = [];
+try {
+    $rows = $db->query("SELECT clave, valor FROM configuracion WHERE clave LIKE 'metodo_pago_%' ORDER BY clave")->fetchAll();
+    foreach ($rows as $r) $metodos_pago_cfg[$r['clave']] = $r['valor'];
+} catch(Exception $e) {}
+$fallback_metodos = ['efectivo','yape','plin','tarjeta_debito','tarjeta_credito','transferencia'];
+$metodos_pago_list = count($metodos_pago_cfg) ? array_values($metodos_pago_cfg) : $fallback_metodos;
+
 // SUNAT — solo cargar si el módulo está instalado
 $_sunat_disponible = false;
 $_sunat_cfg = __DIR__ . '/../includes/config_sunat.php';
@@ -431,14 +462,14 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
       </div>
       <div class="form-group">
         <label class="form-label">Método de pago</label>
-        <select class="form-input" name="metodo_pago">
-          <option value="efectivo">Efectivo</option>
-          <option value="yape">Yape</option>
-          <option value="plin">Plin</option>
-          <option value="tarjeta_debito">Tarjeta débito</option>
-          <option value="tarjeta_credito">Tarjeta crédito</option>
-          <option value="transferencia">Transferencia</option>
-        </select>
+        <div style="display:flex;gap:6px;align-items:center">
+          <select class="form-input" name="metodo_pago" id="sel-metodo-pago" style="flex:1">
+            <?php foreach($metodos_pago_list as $m): ?>
+              <option value="<?= strtolower(str_replace(' ','_',$m)) ?>"><?= clean($m) ?></option>
+            <?php endforeach; ?>
+          </select>
+          <button type="button" onclick="abrirModalMetodoPago()" title="Agregar método de pago" style="background:none;border:1.5px solid var(--border);border-radius:8px;cursor:pointer;font-size:14px;padding:4px 10px;color:var(--text2);flex-shrink:0">+</button>
+        </div>
       </div>
     </div>
 
@@ -569,6 +600,30 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
       <div style="margin-top:14px;display:flex;gap:8px">
         <button type="button" id="btnNewCliSave" onclick="guardarNuevoCliente()" class="btn btn-primary" style="flex:1">💾 Guardar cliente</button>
         <button type="button" onclick="cerrarModalNuevoCliente()" class="btn btn-ghost">Cancelar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL MÉTODOS DE PAGO ═══ -->
+<div id="modalMetodoPago" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center">
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;width:460px;max-width:95vw">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)">
+      <div style="font-size:15px;font-weight:700;color:var(--text)">⚙️ Métodos de pago</div>
+      <button type="button" onclick="cerrarModalMetodoPago()" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:18px">✕</button>
+    </div>
+    <div style="padding:16px">
+      <div id="lista-metodos-pago" style="margin-bottom:14px">
+        <?php foreach($metodos_pago_cfg as $ck => $mv): $idx = str_replace('metodo_pago_','',$ck); ?>
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg3);border-radius:8px;margin-bottom:6px" id="mp-row-<?= $idx ?>">
+            <span style="font-weight:600"><?= clean($mv) ?></span>
+            <button type="button" onclick="eliminarMetodoPago('<?= $idx ?>')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px" title="Eliminar">✕</button>
+          </div>
+        <?php endforeach; ?>
+      </div>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="new-nombre-metodo" class="form-input" placeholder="Ej: Visa, Mastercard, Mercado Pago..." style="flex:1">
+        <button type="button" onclick="agregarMetodoPago()" class="btn btn-primary">+ Agregar</button>
       </div>
     </div>
   </div>
@@ -978,6 +1033,55 @@ function cerrarModalNuevoCliente() {
     document.getElementById('modalNuevoCliente').style.display = 'none';
     var b = document.getElementById('modalBackdrop');
     if (b) b.remove();
+}
+
+function abrirModalMetodoPago() {
+    document.getElementById('modalMetodoPago').style.display = 'flex';
+}
+function cerrarModalMetodoPago() {
+    document.getElementById('modalMetodoPago').style.display = 'none';
+}
+
+async function agregarMetodoPago() {
+    var nombre = document.getElementById('new-nombre-metodo').value.trim();
+    if (!nombre) { alert('Escribe el nombre del método'); return; }
+    try {
+        var r = await fetch('?p=facturacion&action=nueva', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'action=add_metodo_pago&nombre_metodo=' + encodeURIComponent(nombre)
+        });
+        var j = await r.json();
+        if (!j.ok) { alert('Error al guardar'); return; }
+        var idx = document.querySelectorAll('#lista-metodos-pago > div').length + 1;
+        var html = '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg3);border-radius:8px;margin-bottom:6px" id="mp-row-' + idx + '">'
+                 + '<span style="font-weight:600">' + nombre + '</span>'
+                 + '<button type="button" onclick="eliminarMetodoPago(\'' + idx + '\')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px" title="Eliminar">✕</button>'
+                 + '</div>';
+        document.getElementById('lista-metodos-pago').insertAdjacentHTML('beforeend', html);
+        // Agregar al select
+        var opt = document.createElement('option');
+        opt.value = nombre.toLowerCase().replace(/\s+/g,'_');
+        opt.textContent = nombre;
+        document.getElementById('sel-metodo-pago').appendChild(opt);
+        document.getElementById('new-nombre-metodo').value = '';
+        // Recargar la página para que se actualice la lista en PHP
+        setTimeout(function(){ location.reload(); }, 500);
+    } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function eliminarMetodoPago(idx) {
+    if (!confirm('¿Eliminar este método de pago?')) return;
+    try {
+        var r = await fetch('?p=facturacion&action=nueva', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'action=del_metodo_pago&idx=' + idx
+        });
+        var el = document.getElementById('mp-row-' + idx);
+        if (el) el.remove();
+        setTimeout(function(){ location.reload(); }, 300);
+    } catch(e) { alert('Error: ' + e.message); }
 }
 
 async function guardarNuevoCliente() {
