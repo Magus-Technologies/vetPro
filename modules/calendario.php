@@ -113,6 +113,34 @@ $ei=['perro'=>'🐕','gato'=>'🐈','conejo'=>'🐰','ave'=>'🐦','reptil'=>'�
 .cal-stat { flex:1; min-width:80px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:10px 12px; text-align:center; }
 .cal-stat-val { font-size:18px; font-weight:800; color:var(--text); }
 .cal-stat-lbl { font-size:10px; color:var(--text3); margin-top:2px; }
+
+/* ── MÓVIL: vista compacta del calendario ── */
+@media(max-width:768px){
+  .cal-wrap { gap:12px; }
+  .cal-wrap > div { min-width:0; }
+  .cal-grid-head, .cal-grid { gap:1px; width:100%; }
+  .cal-dow { font-size:9px; padding:4px 0; letter-spacing:0; }
+  .cal-cell { min-height:52px; padding:3px; border-width:1px; border-radius:6px; min-width:0; overflow:hidden; }
+  .cal-num { width:18px; height:18px; font-size:10px; margin-bottom:2px; }
+  .cal-chip { font-size:8px; padding:1px 3px; border-radius:3px; margin-bottom:1px; }
+  .cal-more { font-size:8px; }
+  /* Stats: 4 en una fila apretada, sin envolver */
+  .cal-stats { gap:6px; flex-wrap:nowrap; }
+  .cal-stat { min-width:0; padding:8px 4px; border-radius:9px; }
+  .cal-stat-val { font-size:16px; }
+  .cal-stat-lbl { font-size:9px; }
+  /* Botones del header más chicos */
+  .cal-nav-btn { width:32px; height:32px; font-size:14px; }
+  /* Header: apilar título y botones */
+  .page .sec-header { flex-direction:column; align-items:stretch; gap:10px; }
+  .page .sec-header .flex.gap-2 { width:100%; }
+  .page .sec-header .flex.gap-2 .btn { flex:1; justify-content:center; }
+}
+@media(max-width:380px){
+  .cal-cell { min-height:46px; }
+  .cal-chip { font-size:7px; }
+  .cal-dow { font-size:8px; }
+}
 </style>
 
 <div class="page">

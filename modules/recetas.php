@@ -1,28 +1,13 @@
 <?php
 $page = 'recetas'; $pageTitle = 'Recetas Médicas';
-require_once __DIR__ . '/../includes/header.php';
-$db = getDB();
 
-$action = $_GET['action'] ?? 'list';
-$mascota_id = (int)($_GET['mascota_id'] ?? 0);
-$msg = '';
-
-// Datos
-$mascotas_sel=$db->query("SELECT m.id,CONCAT(m.nombre,' (',c.nombre,')') as label FROM mascotas m JOIN clientes c ON c.id=m.cliente_id WHERE m.estado='activo' ORDER BY m.nombre")->fetchAll();
-$vets_sel=$db->query("SELECT id,nombre FROM usuarios WHERE rol IN ('veterinario','admin') AND activo=1")->fetchAll();
-
-$where="r.mascota_id IS NOT NULL"; $params=[];
-if ($mascota_id){$where.=" AND r.mascota_id=?";$params[]=$mascota_id;}
-// Filtro sede
-try { $_r=$db->query("SHOW COLUMNS FROM `mascotas` LIKE 'sede_id'")->fetchAll(); if(!empty($_r)&&!verTodasSedes()){$where.=" AND m.sede_id=".getSede();} } catch(Exception $e){}
-$recetas=$db->prepare("SELECT r.*,m.nombre as mascota,m.especie,u.nombre as vet,c.nombre as dueno,c.telefono,
-  (SELECT COUNT(*) FROM receta_items ri WHERE ri.receta_id=r.id) as n_items
-  FROM recetas r JOIN mascotas m ON m.id=r.mascota_id JOIN usuarios u ON u.id=r.veterinario_id
-  JOIN clientes c ON c.id=m.cliente_id WHERE $where ORDER BY r.fecha DESC LIMIT 60");
-$recetas->execute($params); $recetas=$recetas->fetchAll();
-
-// Imprimir receta
-if ($action==='imprimir' && isset($_GET['id'])) {
+// ── VISTA DE IMPRESIÓN (independiente, SIN el menú del sistema) ──
+// Debe ir ANTES de incluir el header para que la receta salga sola, sin
+// barra lateral ni topbar, y se imprima completa y cuadrada.
+if (($_GET['action'] ?? '') === 'imprimir' && isset($_GET['id'])) {
+  require_once __DIR__ . '/../includes/config.php';
+  $db = getDB();
+  if (function_exists('requireLogin')) requireLogin();
   $rec_id=(int)$_GET['id'];
   // Detectar columnas opcionales del veterinario (firma / colegiatura) de forma segura
   $u_cols = [];
@@ -108,10 +93,16 @@ if ($action==='imprimir' && isset($_GET['id'])) {
   .toolbar button{font-family:inherit;font-size:13px;font-weight:600;border:none;border-radius:8px;padding:9px 16px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.15)}
   .btn-pr{background:var(--brand);color:#fff}.btn-cl{background:#fff;color:#374151;border:1px solid #d1d5db}
   @media print{
-    html,body{background:#fff}
-    .sheet{margin:0;box-shadow:none;width:auto;min-height:auto;padding:0}
-    .toolbar{display:none}
-    .foot{position:fixed}
+    html,body{background:#fff !important;margin:0 !important;padding:0 !important}
+    /* Ocultar TODO lo que no sea el documento al imprimir */
+    .toolbar,.no-print{display:none !important}
+    /* La hoja ocupa el ancho completo, sin sombras. Mantenemos un padding
+       interno suave para que el encabezado y las huellitas no se descuadren */
+    .sheet{margin:0 !important;box-shadow:none !important;width:100% !important;max-width:100% !important;min-height:auto !important;padding:6mm 4mm !important;border:none !important}
+    /* El pie vuelve al flujo normal para que NO se superponga ni corte */
+    .foot{position:static !important;left:auto;right:auto;bottom:auto;margin-top:28px}
+    /* Evitar que las filas de la tabla se partan entre páginas */
+    tr,.med-row{page-break-inside:avoid}
     @page{margin:14mm;size:A4}
   }
   </style></head><body>
@@ -244,6 +235,23 @@ if ($action==='imprimir' && isset($_GET['id'])) {
   </div>
   <script>window.addEventListener('load',function(){setTimeout(function(){window.print();},350);});</script>
   </body></html><?php exit; }
+
+// ── VISTA NORMAL (listado) — aquí sí cargamos el menú del sistema ──
+require_once __DIR__ . '/../includes/header.php';
+$db = getDB();
+$action = $_GET['action'] ?? 'list';
+$mascota_id = (int)($_GET['mascota_id'] ?? 0);
+$msg = '';
+$mascotas_sel=$db->query("SELECT m.id,CONCAT(m.nombre,' (',c.nombre,')') as label FROM mascotas m JOIN clientes c ON c.id=m.cliente_id WHERE m.estado='activo' ORDER BY m.nombre")->fetchAll();
+$vets_sel=$db->query("SELECT id,nombre FROM usuarios WHERE rol IN ('veterinario','admin') AND activo=1")->fetchAll();
+$where="r.mascota_id IS NOT NULL"; $params=[];
+if ($mascota_id){$where.=" AND r.mascota_id=?";$params[]=$mascota_id;}
+try { $_r=$db->query("SHOW COLUMNS FROM `mascotas` LIKE 'sede_id'")->fetchAll(); if(!empty($_r)&&!verTodasSedes()){$where.=" AND m.sede_id=".getSede();} } catch(Exception $e){}
+$recetas=$db->prepare("SELECT r.*,m.nombre as mascota,m.especie,u.nombre as vet,c.nombre as dueno,c.telefono,
+  (SELECT COUNT(*) FROM receta_items ri WHERE ri.receta_id=r.id) as n_items
+  FROM recetas r JOIN mascotas m ON m.id=r.mascota_id JOIN usuarios u ON u.id=r.veterinario_id
+  JOIN clientes c ON c.id=m.cliente_id WHERE $where ORDER BY r.fecha DESC LIMIT 60");
+$recetas->execute($params); $recetas=$recetas->fetchAll();
 
 $ei=['perro'=>'🐕','gato'=>'🐈','conejo'=>'🐰','ave'=>'🐦','reptil'=>'🦎','roedor'=>'🐭','otro'=>'🐾'];
 ?>
