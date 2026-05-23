@@ -359,9 +359,17 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
     <div class="form-row" style="gap:12px;margin-bottom:4px">
       <div class="form-group" style="position:relative">
         <label class="form-label">Cliente <span style="color:var(--text3);font-weight:400">(opcional para boleta / nota de venta)</span></label>
-        <input type="text" id="cli-busq" class="form-input" placeholder="🔍 Buscar por nombre, DNI o RUC..."
-               autocomplete="off" oninput="buscarCliente(this.value)" onfocus="buscarCliente(this.value)"
-               onblur="setTimeout(function(){document.getElementById('cli-drop').style.display='none'},200)">
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="text" id="cli-busq" class="form-input" placeholder="🔍 Buscar por nombre, DNI o RUC..."
+                 autocomplete="off" oninput="buscarCliente(this.value)" onfocus="buscarCliente(this.value)"
+                 onblur="setTimeout(function(){document.getElementById('cli-drop').style.display='none'},200)"
+                 style="flex:1">
+          <button type="button" id="btnCliSearch" onclick="btnBuscarCliente()"
+                  title="Consultar RENIEC o SUNAT"
+                  style="background:var(--primary);border:none;border-radius:8px;cursor:pointer;font-size:14px;padding:6px 14px;color:white;flex-shrink:0">
+            🔍
+          </button>
+        </div>
         <input type="hidden" name="cliente_id" id="cli-id">
         <div id="cli-drop" style="display:none;position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:400;max-height:220px;overflow-y:auto"></div>
         <div id="cli-sel" style="display:none;margin-top:4px;padding:7px 10px;background:rgba(30,168,161,.1);border-radius:8px;font-size:13px;align-items:center;justify-content:space-between">
@@ -534,6 +542,36 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
       <a href="?p=facturacion" class="btn">Cancelar</a>
     </div>
   </form>
+</div>
+
+<!-- ═══ MODAL NUEVO CLIENTE (desde RENIEC/SUNAT) ═══ -->
+<div id="modalNuevoCliente" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center">
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;width:460px;max-width:95vw">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)">
+      <div style="font-size:15px;font-weight:700;color:var(--text)">➕ Nuevo cliente desde RENIEC/SUNAT</div>
+      <button type="button" onclick="cerrarModalNuevoCliente()" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:18px">✕</button>
+    </div>
+    <div style="padding:16px">
+      <div class="form-group"><label class="form-label">Nombre completo *</label>
+        <input type="text" id="new-nombre" class="form-input" placeholder="Nombre obtenido de la consulta"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">DNI</label>
+          <input type="text" id="new-dni" class="form-input" maxlength="8" placeholder="8 dígitos"></div>
+        <div class="form-group"><label class="form-label">RUC</label>
+          <input type="text" id="new-ruc" class="form-input" maxlength="11" placeholder="11 dígitos"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Teléfono</label>
+        <input type="text" id="new-telefono" class="form-input" placeholder="+51 987 654 321"></div>
+      <div class="form-group"><label class="form-label">Email</label>
+        <input type="email" id="new-email" class="form-input" placeholder="email@ejemplo.com"></div>
+      <div class="form-group"><label class="form-label">Dirección</label>
+        <input type="text" id="new-direccion" class="form-input" placeholder="Dirección del cliente"></div>
+      <div style="margin-top:14px;display:flex;gap:8px">
+        <button type="button" id="btnNewCliSave" onclick="guardarNuevoCliente()" class="btn btn-primary" style="flex:1">💾 Guardar cliente</button>
+        <button type="button" onclick="cerrarModalNuevoCliente()" class="btn btn-ghost">Cancelar</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <?php elseif($action==='ver' && $venta_detalle): ?>
@@ -892,17 +930,122 @@ function actualizarSerieNum() {
     if (numeroEl) numeroEl.value = d.numero;
 }
 
-// ── BUSCADOR CLIENTES ──
+// ── BOTÓN CONSULTAR (lupa) → buscar en RENIEC/SUNAT ──
+async function btnBuscarCliente() {
+    var q = (document.getElementById('cli-busq').value || '').trim();
+    if (!q) { alert('Escribe un DNI (8 dígitos) o RUC (11 dígitos) en el campo de búsqueda'); return; }
+    var isDni = /^\d{8}$/.test(q);
+    var isRuc = /^\d{11}$/.test(q);
+    if (!isDni && !isRuc) { alert('Escribe un número de 8 dígitos (DNI) o 11 dígitos (RUC)'); return; }
+
+    var btn = document.getElementById('btnCliSearch');
+    btn.disabled = true; btn.textContent = '⏳';
+
+    try {
+        var r = await fetch('<?= BASE_URL ?>/api/consulta_documento.php?tipo=' + (isDni ? 'dni' : 'ruc') + '&numero=' + q);
+        var j = await r.json();
+
+        if (!j.ok) {
+            alert(j.error || 'No se encontró ese documento');
+            btn.disabled = false; btn.textContent = '🔍';
+            return;
+        }
+
+        // Encontrado → abrir modal pre-llenado
+        abrirModalNuevoCliente(j.nombre || '', isDni ? q : '', isRuc ? q : '', j.direccion || '');
+
+    } catch(e) {
+        alert('Error de red: ' + e.message);
+    } finally {
+        btn.disabled = false; btn.textContent = '🔍';
+    }
+}
+
+// ── MODAL NUEVO CLIENTE DESDE API (vanilla JS) ──
+function abrirModalNuevoCliente(nombre, dni, ruc, direccion) {
+    document.getElementById('new-nombre').value = nombre || '';
+    document.getElementById('new-dni').value    = dni    || '';
+    document.getElementById('new-ruc').value    = ruc    || '';
+    document.getElementById('new-telefono').value = '';
+    document.getElementById('new-email').value    = '';
+    document.getElementById('new-direccion').value = direccion || '';
+    var modal = document.getElementById('modalNuevoCliente');
+    modal.style.display = 'flex';
+    document.body.insertAdjacentHTML('beforeend', '<div id="modalBackdrop" style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:998"></div>');
+}
+
+function cerrarModalNuevoCliente() {
+    document.getElementById('modalNuevoCliente').style.display = 'none';
+    var b = document.getElementById('modalBackdrop');
+    if (b) b.remove();
+}
+
+async function guardarNuevoCliente() {
+    var nombre   = document.getElementById('new-nombre').value.trim();
+    var dni      = document.getElementById('new-dni').value.trim();
+    var ruc      = document.getElementById('new-ruc').value.trim();
+    var telefono = document.getElementById('new-telefono').value.trim();
+    var email    = document.getElementById('new-email').value.trim();
+    var direccion = document.getElementById('new-direccion').value.trim();
+
+    if (!nombre) { alert('El nombre es obligatorio'); return; }
+
+    var btn = document.getElementById('btnNewCliSave');
+    btn.disabled = true; btn.textContent = 'Creando...';
+
+    try {
+        var r = await fetch('<?= BASE_URL ?>/api/cliente_crear.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nombre, dni, ruc, telefono, email, direccion })
+        });
+        var j = await r.json();
+        if (!j.ok) { alert(j.error || 'No se pudo crear'); return; }
+
+        var nuevo = { id: j.id, nombre: j.nombre, dni: j.dni || '', ruc: j.ruc || '' };
+        CLIENTES.push(nuevo);
+        seleccionarCliente(nuevo);
+        cerrarModalNuevoCliente();
+
+    } catch(e) {
+        alert('Error: ' + e.message);
+    } finally {
+        btn.disabled = false; btn.textContent = '💾 Guardar cliente';
+    }
+}
 function buscarCliente(val) {
     var drop = document.getElementById('cli-drop');
-    var q = (val || '').toLowerCase();
+    var q = (val || '').trim();
+    // Si parece un documento parcial (7+ dígitos o 10+ dígitos) ofrecer consulta remota
+    var pareceDni = /^\d{7,8}$/.test(q);
+    var pareceRuc = /^\d{10,11}$/.test(q);
+    var isDni = /^\d{8}$/.test(q);
+    var isRuc = /^\d{11}$/.test(q);
     var matches = q
       ? CLIENTES.filter(function(c) {
           return c.nombre.toLowerCase().indexOf(q)>=0 || (c.dni&&c.dni.indexOf(q)>=0) || (c.ruc&&c.ruc.indexOf(q)>=0);
         }).slice(0,8)
       : CLIENTES.slice(0,8);   // focus sin texto → muestra los primeros 8
-    if (!matches.length) { drop.innerHTML='<div style="padding:12px 14px;font-size:12px;color:var(--text3)">Sin resultados</div>'; drop.style.display='block'; return; }
+
     var html = '';
+
+    // Si no hay matches locales y parece un documento (7+ dígitos), ofrecer opción remota
+    if (matches.length === 0 && (pareceDni || pareceRuc)) {
+        var tipo = pareceDni ? 'dni' : 'ruc';
+        html += '<div class="cli-opt" style="padding:10px 14px;cursor:pointer;background:var(--teal-l);border-bottom:1px solid var(--border)"'
+             +  ' onmouseover="this.style.background=\'rgba(30,168,161,.15)\'" onmouseout="this.style.background=\'var(--teal-l)\'"'
+             +  ' onclick="consultarDocRemoto(\'' + tipo + '\',\'' + q + '\')">'
+             +  '<div style="font-size:13px;font-weight:600;color:var(--teal-d)">🔍 No existe — Consultar en ' + (pareceDni ? 'RENIEC' : 'SUNAT') + '</div>'
+             +  '<div style="font-size:11px;color:var(--text3)">' + (pareceDni ? 'DNI: ' : 'RUC: ') + q + ' — clic para buscar y crear</div>'
+             +  '</div>'
+             +  '<div id="cli-remote-result" style="display:none;padding:12px 14px;border-bottom:1px solid var(--border);background:var(--bg2)"></div>';
+    } else if (!matches.length) {
+        // Búsqueda por nombre sin resultados → no mostrar nada (el campo vacío = CLIENTES VARIOS)
+        drop.innerHTML = '';
+        drop.style.display = 'none';
+        return;
+    }
+
     matches.forEach(function(c) {
         html += '<div class="cli-opt" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border)"'
              + ' onmouseover="this.style.background=\'var(--bg3)\'" onmouseout="this.style.background=\'\'">'
@@ -914,11 +1057,81 @@ function buscarCliente(val) {
     drop.innerHTML = html;
     drop.style.display = 'block';
     drop.querySelectorAll('.cli-opt').forEach(function(el, i) {
-        el.addEventListener('mousedown', function(e) {
-            e.preventDefault();
-            seleccionarCliente(matches[i]);
-        });
+        if (matches[i]) {
+            el.addEventListener('mousedown', function(e) {
+                e.preventDefault();
+                seleccionarCliente(matches[i]);
+            });
+        }
     });
+}
+
+// ── CONSULTA DNI/RUC A API EXTERNA Y CREA CLIENTE ──
+async function consultarDocRemoto(tipo, numero) {
+    var drop = document.getElementById('cli-drop');
+    var resultDiv = document.getElementById('cli-remote-result') || document.getElementById('cli-remote-result');
+    if (!resultDiv) return;
+
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = '<div style="font-size:12px;color:var(--text3)">Consultando ' + (tipo === 'dni' ? 'RENIEC' : 'SUNAT') + '...</div>';
+
+    try {
+        var r = await fetch('<?= BASE_URL ?>/api/consulta_documento.php?tipo=' + tipo + '&numero=' + numero);
+        var j = await r.json();
+
+        if (!j.ok) {
+            resultDiv.innerHTML = '<div style="font-size:12px;color:var(--red)">❌ ' + (j.error || 'No se encontró') + '</div>';
+            return;
+        }
+
+        var nombreRemoto = j.nombre || (tipo === 'dni' ? 'Cliente DNI ' + numero : 'Empresa RUC ' + numero);
+        var dirRemoto = j.direccion || '';
+        resultDiv.innerHTML =
+            '<div style="font-size:12px">' +
+            '<div style="font-weight:600;color:var(--success)">✅ Encontrado: ' + nombreRemoto + '</div>' +
+            (dirRemoto ? '<div style="color:var(--text3)">' + dirRemoto + '</div>' : '') +
+            '<button type="button" class="btn btn-sm btn-primary" style="margin-top:6px" onclick="crearClienteRemoto(\'' + tipo + '\',\'' + numero + '\',\'' + nombreRemoto.replace(/'/g,"\\'") + '\',\'' + dirRemoto.replace(/'/g,"\\'") + '\')">Crear cliente con estos datos</button>' +
+            '</div>';
+    } catch(e) {
+        resultDiv.innerHTML = '<div style="font-size:12px;color:var(--red)">Error de red: ' + e.message + '</div>';
+    }
+}
+
+async function crearClienteRemoto(tipo, numero, nombre, direccion) {
+    var btn = event.target;
+    btn.disabled = true; btn.textContent = 'Creando...';
+
+    try {
+        var payload = { nombre: nombre };
+        if (tipo === 'dni') payload.dni = numero;
+        else                payload.ruc  = numero;
+        if (direccion) payload.direccion = direccion;
+
+        var r = await fetch('<?= BASE_URL ?>/api/cliente_crear.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        var j = await r.json();
+
+        if (!j.ok) {
+            alert(j.error || 'No se pudo crear el cliente.');
+            btn.disabled = false; btn.textContent = 'Crear cliente con estos datos';
+            return;
+        }
+
+        // Agregar el nuevo cliente a la lista local y seleccionarlo
+        var nuevoCliente = { id: j.id, nombre: j.nombre, dni: j.dni || '', ruc: j.ruc || '' };
+        CLIENTES.push(nuevoCliente);
+        seleccionarCliente(nuevoCliente);
+
+        // Cerrar dropdown
+        document.getElementById('cli-drop').style.display = 'none';
+
+    } catch(e) {
+        alert('Error de red: ' + e.message);
+        btn.disabled = false; btn.textContent = 'Crear cliente con estos datos';
+    }
 }
 
 function seleccionarCliente(c) {
