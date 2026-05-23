@@ -11,12 +11,12 @@ CREATE TABLE IF NOT EXISTS metodos_pago (
 );
 
 INSERT INTO metodos_pago (nombre, icono, orden) VALUES
-    ('Efectivo',        '💵', 1),
-    ('Yape',            '📱', 2),
-    ('Plin',            '📱', 3),
-    ('Tarjeta débito',  '💳', 4),
-    ('Tarjeta crédito', '💳', 5),
-    ('Transferencia',   '🏦', 6)
+    ('Efectivo',        'EF', 1),
+    ('Yape',            'YP', 2),
+    ('Plin',            'PL', 3),
+    ('Tarjeta debito',  'TD', 4),
+    ('Tarjeta credito', 'TC', 5),
+    ('Transferencia',   'TR', 6)
 ON DUPLICATE KEY UPDATE nombre=VALUES(nombre);
 
 -- Limpiar el approach anterior (configuracion con metodo_pago_N)
