@@ -23,11 +23,13 @@ if (!is_array($input)) {
     exit;
 }
 
-$nombre   = trim($input['nombre'] ?? '');
-$dni      = preg_replace('/\D/', '', trim($input['dni'] ?? ''));
-$ruc      = preg_replace('/\D/', '', trim($input['ruc'] ?? ''));
-$telefono = trim($input['telefono'] ?? '');
-$email    = trim($input['email'] ?? '');
+$nombre    = trim($input['nombre'] ?? '');
+$dni       = preg_replace('/\D/', '', trim($input['dni'] ?? ''));
+$ruc       = preg_replace('/\D/', '', trim($input['ruc'] ?? ''));
+$ce        = preg_replace('/\D/', '', trim($input['ce'] ?? ''));
+$pasaporte = trim($input['pasaporte'] ?? '');
+$telefono  = trim($input['telefono'] ?? '');
+$email     = trim($input['email'] ?? '');
 $direccion = trim($input['direccion'] ?? '');
 
 if (!$nombre) {
@@ -47,6 +49,11 @@ if ($ruc && strlen($ruc) !== 11) {
 
 if ($dni && $ruc) {
     echo json_encode(['ok' => false, 'error' => 'Un cliente no puede tener DNI y RUC a la vez.']);
+    exit;
+}
+
+if ($ce && strlen($ce) < 9) {
+    echo json_encode(['ok' => false, 'error' => 'El Carné de Extranjería debe tener al menos 9 dígitos.']);
     exit;
 }
 
@@ -71,15 +78,25 @@ if ($ruc) {
         exit;
     }
 }
+if ($ce) {
+    $st = $db->prepare("SELECT id FROM clientes WHERE ce=? AND activo=1 LIMIT 1");
+    $st->execute([$ce]);
+    if ($st->fetchColumn()) {
+        echo json_encode(['ok' => false, 'error' => "Ya existe un cliente con CE $ce."]);
+        exit;
+    }
+}
 
 try {
-    $st = $db->prepare("INSERT INTO clientes (nombre,dni,ruc,telefono,email,direccion,sede_id,activo) VALUES (?,?,?,?,?,?,?,1)");
+    $st = $db->prepare("INSERT INTO clientes (nombre,dni,ruc,ce,pasaporte,telefono,email,direccion,sede_id,activo) VALUES (?,?,?,?,?,?,?,?,?,1)");
     $st->execute([
         $nombre,
-        $dni   ?: '',
-        $ruc   ?: '',
-        $telefono ?: '',
-        $email    ?: '',
+        $dni       ?: '',
+        $ruc       ?: '',
+        $ce        ?: '',
+        $pasaporte ?: '',
+        $telefono  ?: '',
+        $email     ?: '',
         $direccion ?: '',
         $sede_id,
     ]);
@@ -91,6 +108,8 @@ try {
         'nombre' => $nombre,
         'dni'  => $dni  ?: null,
         'ruc'  => $ruc  ?: null,
+        'ce'   => $ce   ?: null,
+        'pasaporte' => $pasaporte ?: null,
     ]);
 } catch (Throwable $e) {
     echo json_encode(['ok' => false, 'error' => 'No se pudo crear el cliente: ' . $e->getMessage()]);

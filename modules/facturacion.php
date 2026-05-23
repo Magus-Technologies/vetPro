@@ -130,11 +130,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $user['id'],
                     $tipo, $serie, $numero,
                     $subtotal, $igv, $aplica_igv, $descuento, $total,
-                    $_POST['metodo_pago'] ?? 'efectivo',
+                    'multi',
                     'pagado',
                     trim($_POST['notas'] ?? '')
                 ]);
                 $venta_id = (int)$db->lastInsertId();
+
+                // Guardar métodos de pago (multi)
+                $pagosRaw = json_decode($_POST['pagos_json'] ?? '[]', true);
+                $pagosOk = is_array($pagosRaw) ? $pagosRaw : [];
+                if (count($pagosOk) === 0) {
+                    $pagosOk[] = ['metodo'=>'efectivo','monto'=>$total];
+                }
+                $stPago = $db->prepare("INSERT INTO venta_pagos (venta_id,metodo_pago,monto) VALUES (?,?,?)");
+                foreach ($pagosOk as $p) {
+                    $stPago->execute([$venta_id, $p['metodo'], (float)$p['monto']]);
+                }
 
                 $st2 = $db->prepare("INSERT INTO venta_items (venta_id,tipo,referencia_id,descripcion,cantidad,precio_unitario,subtotal) VALUES (?,?,?,?,?,?,?)");
                 foreach ($items_ok as $it) {
@@ -146,11 +157,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 throw $e;
             }
 
-            // Movimiento de caja
+            // Movimiento de caja (multi-método)
             $caja = $db->query("SELECT id FROM cajas WHERE estado='abierta' ORDER BY id DESC LIMIT 1")->fetchColumn();
             if ($caja) {
-                $db->prepare("INSERT INTO movimientos_caja (caja_id,usuario_id,tipo,concepto,monto,metodo_pago,categoria,venta_id) VALUES (?,?,'ingreso',?,?,?,'servicio',?)")
-                   ->execute([$caja, $user['id'], "Venta $serie-".str_pad($numero,5,'0',STR_PAD_LEFT), $total, $_POST['metodo_pago']??'efectivo', $venta_id]);
+                $metodoPrincipal = count($pagosOk) > 0 ? $pagosOk[0]['metodo'] : 'efectivo';
+                $stCaja = $db->prepare("INSERT INTO movimientos_caja (caja_id,usuario_id,tipo,concepto,monto,metodo_pago,categoria,venta_id) VALUES (?,?,'ingreso',?,?,?,'servicio',?)");
+                foreach ($pagosOk as $p) {
+                    $stCaja->execute([$caja, $user['id'], "Venta $serie-".str_pad($numero,5,'0',STR_PAD_LEFT), (float)$p['monto'], $p['metodo'], $venta_id]);
+                }
             }
 
             // Generación de XML (solo factura/boleta) — NO se envía a SUNAT todavía.
@@ -206,34 +220,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // ── AGREGAR / ELIMINAR MÉTODO DE PAGO ─────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_metodo_pago') {
-    $nombre = trim($_POST['nombre_metodo'] ?? '');
+    header('Content-Type: application/json');
+    $nombre = trim($_POST['nombre'] ?? '');
     if ($nombre) {
-        $n = 1;
-        while (true) {
-            $ck = "metodo_pago_$n";
-            $st = $db->prepare("SELECT id FROM configuracion WHERE clave=?");
-            $st->execute([$ck]);
-            if (!$st->fetchColumn()) break;
-            $n++;
+        try {
+            $st = $db->query("SELECT COALESCE(MAX(orden),0)+1 FROM metodos_pago");
+            $orden = (int)$st->fetchColumn();
+            $db->prepare("INSERT INTO metodos_pago (nombre, orden, activo) VALUES (?, ?, 1)")->execute([$nombre, $orden]);
+        } catch(Exception $e) {
+            echo json_encode(['ok' => false, 'error' => $e->getMessage()]); exit;
         }
-        $db->prepare("INSERT INTO configuracion (clave,valor) VALUES (?,?)")->execute([$ck, $nombre]);
     }
     echo json_encode(['ok' => true]); exit;
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'del_metodo_pago') {
-    $idx = (int)($_POST['idx'] ?? 0);
-    $db->prepare("DELETE FROM configuracion WHERE clave=?")->execute(["metodo_pago_$idx"]);
+    header('Content-Type: application/json');
+    $id = (int)($_POST['id'] ?? 0);
+    $db->prepare("DELETE FROM metodos_pago WHERE id=?")->execute([$id]);
     echo json_encode(['ok' => true]); exit;
 }
 
-// Cargar métodos de pago desde BD
-$metodos_pago_cfg = [];
+// Cargar métodos de pago desde la tabla dedicada
+$metodos_pago_list = [];
 try {
-    $rows = $db->query("SELECT clave, valor FROM configuracion WHERE clave LIKE 'metodo_pago_%' ORDER BY clave")->fetchAll();
-    foreach ($rows as $r) $metodos_pago_cfg[$r['clave']] = $r['valor'];
+    $rows = $db->query("SELECT id, nombre FROM metodos_pago WHERE activo=1 ORDER BY orden, id")->fetchAll();
+    foreach ($rows as $r) $metodos_pago_list[] = ['id'=>$r['id'], 'nombre'=>$r['nombre']];
 } catch(Exception $e) {}
-$fallback_metodos = ['efectivo','yape','plin','tarjeta_debito','tarjeta_credito','transferencia'];
-$metodos_pago_list = count($metodos_pago_cfg) ? array_values($metodos_pago_cfg) : $fallback_metodos;
 
 // SUNAT — solo cargar si el módulo está instalado
 $_sunat_disponible = false;
@@ -293,6 +305,8 @@ if ($action === 'ver' && !empty($_GET['id'])) {
 
     $st2 = $db->prepare("SELECT * FROM venta_items WHERE venta_id=? ORDER BY id ASC");
     $st2->execute([$vid]); $items_detalle = $st2->fetchAll();
+
+    $pagos_detalle = $db->prepare("SELECT metodo_pago, monto FROM venta_pagos WHERE venta_id=? ORDER BY id ASC")->fetchAll();
 }
 
 // ─── DATOS PARA SELECTS ─────────────────────────────────────────
@@ -313,7 +327,7 @@ if (!$_fac_all) {
     $_fac_sw_prod = "";
 }
 
-$clientes_sel  = $db->query("SELECT id,nombre,telefono,COALESCE(dni,'') as dni,COALESCE(ruc,'') as ruc FROM clientes WHERE activo=1$_fac_sw ORDER BY nombre")->fetchAll();
+$clientes_sel  = $db->query("SELECT id,nombre,telefono,COALESCE(dni,'') as dni,COALESCE(ruc,'') as ruc,COALESCE(ce,'') as ce,COALESCE(pasaporte,'') as pasaporte FROM clientes WHERE activo=1$_fac_sw ORDER BY nombre")->fetchAll();
 $mascotas_sel  = $db->query("SELECT m.id,CONCAT(m.nombre,' (',c.nombre,')') as label,m.cliente_id FROM mascotas m JOIN clientes c ON c.id=m.cliente_id WHERE m.estado='activo'$_fac_swm ORDER BY m.nombre")->fetchAll();
 $servicios_sel = $db->query("SELECT id,nombre,precio FROM servicios WHERE activo=1 ORDER BY tipo,nombre")->fetchAll();
 $productos_sel = $db->query("SELECT id,nombre,precio_venta as precio FROM productos WHERE activo=1 AND stock>0".($_fac_sw_prod??" ")." ORDER BY nombre")->fetchAll();
@@ -378,204 +392,186 @@ foreach ($_todas_sedes as $_s) {
 }
 $_series_sede_actual = $_series_fac[$_sede_fac] ?? $_series_fac[1] ?? [];
 // Datos JS clientes y mascotas
-$_cli_js = array_map(fn($c)=>['id'=>$c['id'],'nombre'=>$c['nombre'],'dni'=>$c['dni']??'','ruc'=>$c['ruc']??''], $clientes_sel);
+$_cli_js = array_map(fn($c)=>['id'=>$c['id'],'nombre'=>$c['nombre'],'dni'=>$c['dni']??'','ruc'=>$c['ruc']??'','ce'=>$c['ce']??'','pasaporte'=>$c['pasaporte']??''], $clientes_sel);
 $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>$m['cliente_id']], $mascotas_sel);
 ?>
-<div class="card" style="max-width:860px">
+<div class="card" style="max-width:1400px;width:100%">
   <div class="sec-header mb-3"><div class="sec-title">Nueva Venta</div><a href="?p=facturacion" class="btn btn-sm btn-ghost">← Volver</a></div>
   <form method="POST" id="venta-form">
     <input type="hidden" name="action" value="save">
 
-    <!-- CLIENTE + MASCOTA con buscador -->
-    <div class="form-row" style="gap:12px;margin-bottom:4px">
-      <div class="form-group" style="position:relative">
-        <label class="form-label">Cliente <span style="color:var(--text3);font-weight:400">(opcional para boleta / nota de venta)</span></label>
-        <div style="display:flex;gap:8px;align-items:center">
-          <input type="text" id="cli-busq" class="form-input" placeholder="🔍 Buscar por nombre, DNI o RUC..."
-                 autocomplete="off" oninput="buscarCliente(this.value)" onfocus="buscarCliente(this.value)"
-                 onblur="setTimeout(function(){document.getElementById('cli-drop').style.display='none'},200)"
-                 style="flex:1">
-          <button type="button" id="btnCliSearch" onclick="btnBuscarCliente()"
-                  title="Consultar RENIEC o SUNAT"
-                  style="background:var(--primary);border:none;border-radius:8px;cursor:pointer;font-size:14px;padding:6px 14px;color:white;flex-shrink:0">
-            🔍
-          </button>
+    <div class="form-body" style="display:grid;grid-template-columns:1fr 340px;gap:16px;align-items:start">
+      <div class="form-col-left"><!-- COLUMNA IZQUIERDA -->
+        <!-- CLIENTE + MASCOTA -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div class="form-group" style="position:relative">
+            <label class="form-label">Cliente <span style="color:var(--text3);font-weight:400">(opcional para boleta/nota)</span></label>
+            <div style="display:flex;gap:6px;align-items:center">
+              <select id="sel-tipodoc" onchange="actualizarPlaceHolderDoc()" style="border:1.5px solid var(--border);border-radius:8px;padding:7px 10px;background:var(--bg2);color:var(--text);font-size:13px;flex-shrink:0;min-width:100px">
+                <option value="dni">DNI</option>
+                <option value="ruc">RUC</option>
+                <option value="ce">Carné Ext.</option>
+                <option value="pasaporte">Pasaporte</option>
+              </select>
+              <input type="text" id="cli-busq" class="form-input" placeholder="🔍 Ingresa el número..."
+                     autocomplete="off" oninput="buscarCliente(this.value)" onfocus="buscarCliente(this.value)"
+                     onblur="setTimeout(function(){document.getElementById('cli-drop').style.display='none'},200)" style="flex:1">
+              <button type="button" id="btnCliSearch" onclick="btnBuscarCliente()"
+                      title="Consultar RENIEC o SUNAT"
+                      style="background:var(--primary);border:none;border-radius:8px;cursor:pointer;font-size:14px;padding:7px 12px;color:white;flex-shrink:0">🔍</button>
+            </div>
+            <input type="hidden" name="cliente_id" id="cli-id">
+            <div id="cli-drop" style="display:none;position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:400;max-height:200px;overflow-y:auto"></div>
+            <div id="cli-sel" style="display:none;margin-top:4px;padding:7px 10px;background:rgba(30,168,161,.1);border-radius:8px;font-size:13px;align-items:center;justify-content:space-between">
+              <span id="cli-sel-nom" style="font-weight:600;color:var(--primary-d)"></span>
+              <button type="button" onclick="limpiarCliente()" style="background:none;border:none;color:var(--text3);cursor:pointer">✕</button>
+            </div>
+          </div>
+          <div class="form-group" style="position:relative">
+            <label class="form-label">Mascota <span style="color:var(--text3);font-weight:400">(opcional)</span></label>
+            <input type="text" id="mas-busq" class="form-input" placeholder="🐾 Selecciona primero un cliente"
+                   autocomplete="off" oninput="buscarMascota(this.value)" onfocus="buscarMascota('')"
+                   onblur="setTimeout(function(){document.getElementById('mas-drop').style.display='none'},200)" disabled>
+            <input type="hidden" name="mascota_id" id="mas-id">
+            <div id="mas-drop" style="display:none;position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:400;max-height:200px;overflow-y:auto"></div>
+            <div id="mas-sel" style="display:none;margin-top:4px;padding:7px 10px;background:var(--bg3);border-radius:8px;font-size:13px;align-items:center;justify-content:space-between">
+              <span id="mas-sel-nom" style="font-weight:600"></span>
+              <button type="button" onclick="limpiarMascota()" style="background:none;border:none;color:var(--text3);cursor:pointer">✕</button>
+            </div>
+          </div>
         </div>
-        <input type="hidden" name="cliente_id" id="cli-id">
-        <div id="cli-drop" style="display:none;position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:400;max-height:220px;overflow-y:auto"></div>
-        <div id="cli-sel" style="display:none;margin-top:4px;padding:7px 10px;background:rgba(30,168,161,.1);border-radius:8px;font-size:13px;align-items:center;justify-content:space-between">
-          <span id="cli-sel-nom" style="font-weight:600;color:var(--primary-d)"></span>
-          <button type="button" onclick="limpiarCliente()" style="background:none;border:none;color:var(--text3);cursor:pointer">✕</button>
-        </div>
-      </div>
-      <div class="form-group" style="position:relative">
-        <label class="form-label">Mascota <span style="color:var(--text3);font-weight:400">(opcional)</span></label>
-        <input type="text" id="mas-busq" class="form-input" placeholder="🐾 Selecciona primero un cliente"
-               autocomplete="off" oninput="buscarMascota(this.value)" onfocus="buscarMascota('')"
-               onblur="setTimeout(function(){document.getElementById('mas-drop').style.display='none'},200)" disabled>
-        <input type="hidden" name="mascota_id" id="mas-id">
-        <div id="mas-drop" style="display:none;position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:400;max-height:200px;overflow-y:auto"></div>
-        <div id="mas-sel" style="display:none;margin-top:4px;padding:7px 10px;background:var(--bg3);border-radius:8px;font-size:13px;align-items:center;justify-content:space-between">
-          <span id="mas-sel-nom" style="font-weight:600"></span>
-          <button type="button" onclick="limpiarMascota()" style="background:none;border:none;color:var(--text3);cursor:pointer">✕</button>
-        </div>
-      </div>
-    </div>
-    <div style="font-size:11px;color:var(--text3);margin-bottom:12px;padding-left:2px">
-      💡 Si dejas el cliente vacío, se emite a nombre de <strong>"CLIENTES VARIOS"</strong> (solo para boleta o nota de venta).
-    </div>
 
-    <!-- TIPO DOC + SERIE + NÚMERO + CONDICIÓN -->
-    <div style="display:grid;grid-template-columns:1.4fr 0.8fr 0.9fr 1fr;gap:10px;margin-bottom:12px">
-      <div class="form-group">
-        <label class="form-label">Tipo Documento</label>
-        <select class="form-input" name="tipo_comprobante" id="sel-tipo" onchange="actualizarSerieNum()">
-          <option value="boleta">BOLETA</option>
-          <option value="factura">FACTURA</option>
-          <option value="ticket">NOTA DE VENTA</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Serie</label>
-        <input class="form-input" id="disp-serie" readonly
-               style="background:var(--bg3);font-weight:800;letter-spacing:2px;color:var(--primary);text-align:center;cursor:default">
-      </div>
-      <div class="form-group">
-        <label class="form-label">N° Documento</label>
-        <input class="form-input" id="disp-numero" readonly
-               style="background:var(--bg3);font-weight:800;font-size:15px;text-align:center;cursor:default">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Condición Pago</label>
-        <select class="form-input" name="condicion_pago">
-          <option value="contado">Contado</option>
-          <option value="credito">Crédito</option>
-        </select>
-      </div>
-    </div>
-
-    <!-- FECHA + MÉTODO -->
-    <div class="form-row" style="gap:12px;margin-bottom:12px">
-      <div class="form-group">
-        <label class="form-label">Fecha Emisión</label>
-        <input class="form-input" type="date" name="fecha_emision" value="<?= date('Y-m-d') ?>">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Método de pago</label>
-        <div style="display:flex;gap:6px;align-items:center">
-          <select class="form-input" name="metodo_pago" id="sel-metodo-pago" style="flex:1">
-            <?php foreach($metodos_pago_list as $m): ?>
-              <option value="<?= strtolower(str_replace(' ','_',$m)) ?>"><?= clean($m) ?></option>
-            <?php endforeach; ?>
-          </select>
-          <button type="button" onclick="abrirModalMetodoPago()" title="Agregar método de pago" style="background:none;border:1.5px solid var(--border);border-radius:8px;cursor:pointer;font-size:14px;padding:4px 10px;color:var(--text2);flex-shrink:0">+</button>
+        <!-- TIPO DOC + SERIE + N° + CONDICIÓN + FECHA -->
+        <div style="display:grid;grid-template-columns:1fr 0.65fr 0.65fr 0.75fr 0.9fr;gap:8px;margin-bottom:10px">
+          <div class="form-group">
+            <label class="form-label">Tipo Doc.</label>
+            <select class="form-input" name="tipo_comprobante" id="sel-tipo" onchange="actualizarSerieNum()" style="font-size:13px">
+              <option value="boleta">BOLETA</option>
+              <option value="factura">FACTURA</option>
+              <option value="ticket">NOTA VENTA</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Serie</label>
+            <input class="form-input" id="disp-serie" readonly style="background:var(--bg3);font-weight:800;letter-spacing:1px;color:var(--primary);text-align:center;font-size:13px;cursor:default">
+          </div>
+          <div class="form-group">
+            <label class="form-label">N° Doc.</label>
+            <input class="form-input" id="disp-numero" readonly style="background:var(--bg3);font-weight:800;font-size:13px;text-align:center;cursor:default">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Condición</label>
+            <select class="form-input" name="condicion_pago" style="font-size:13px">
+              <option value="contado">Contado</option>
+              <option value="credito">Crédito</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">F. Emisión</label>
+            <input class="form-input" type="date" name="fecha_emision" value="<?= date('Y-m-d') ?>" style="font-size:13px">
+          </div>
         </div>
-      </div>
-    </div>
 
-    <!-- ── ITEMS ── -->
-    <div style="border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:14px">
-      <div class="flex items-center justify-between mb-2">
-        <div class="sec-title">Servicios y Productos</div>
-        <div class="flex gap-1">
-          <button type="button" class="btn btn-sm btn-primary" onclick="addItem('servicio')">+ Servicio</button>
-          <button type="button" class="btn btn-sm" onclick="addItem('producto')">+ Producto</button>
-          <button type="button" class="btn btn-sm" style="background:#ede9fe;color:#6d28d9;border-color:#c4b5fd" onclick="addItem('petshop')">🛒 Pet Shop</button>
-          <button type="button" class="btn btn-sm" onclick="addItemManual()">+ Manual</button>
+        <!-- ── ITEMS ── -->
+        <div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
+          <div class="flex items-center justify-between mb-2">
+            <div class="sec-title">Servicios y Productos</div>
+            <div class="flex gap-1">
+              <button type="button" class="btn btn-sm btn-primary" onclick="addItem('servicio')">+ Servicio</button>
+              <button type="button" class="btn btn-sm" onclick="addItem('producto')">+ Producto</button>
+              <button type="button" class="btn btn-sm" style="background:#ede9fe;color:#6d28d9;border-color:#c4b5fd" onclick="addItem('petshop')">🛒 Pet Shop</button>
+              <button type="button" class="btn btn-sm" onclick="addItemManual()">+ Manual</button>
+            </div>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:13px" id="items-table">
+            <thead id="items-thead" style="display:none">
+              <tr style="background:var(--bg3)">
+                <th style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">Descripción</th>
+                <th style="padding:6px 8px;text-align:center;width:65px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">Cant.</th>
+                <th style="padding:6px 8px;text-align:right;width:100px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">Precio (S/.)</th>
+                <th style="padding:6px 8px;text-align:right;width:85px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">Subtotal</th>
+                <th style="width:28px;border-bottom:1px solid var(--border)"></th>
+              </tr>
+            </thead>
+            <tbody id="items-list"></tbody>
+          </table>
+          <div id="items-empty" class="text-center text-muted" style="padding:16px;font-size:13px">
+            Haz clic en <strong>+ Servicio</strong> o <strong>+ Producto</strong> para agregar ítems
+          </div>
         </div>
-      </div>
-      <!-- Tabla de ítems -->
-      <table style="width:100%;border-collapse:collapse;font-size:13px" id="items-table">
-        <thead id="items-thead" style="display:none">
-          <tr style="background:var(--bg3)">
-            <th style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">Descripción</th>
-            <th style="padding:6px 8px;text-align:center;width:70px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">Cant.</th>
-            <th style="padding:6px 8px;text-align:right;width:110px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">Precio (S/.)</th>
-            <th style="padding:6px 8px;text-align:right;width:90px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">Subtotal</th>
-            <th style="width:32px;border-bottom:1px solid var(--border)"></th>
-          </tr>
-        </thead>
-        <tbody id="items-list"></tbody>
-      </table>
-      <div id="items-empty" class="text-center text-muted" style="padding:20px;font-size:13px">
-        Haz clic en <strong>+ Servicio</strong> o <strong>+ Producto</strong> para agregar ítems
-      </div>
-    </div>
 
-    <!-- TOTALES -->
-    <div class="form-row">
-      <div class="form-group">
-        <label class="form-label">Descuento (S/.)</label>
-        <input class="form-input" type="number" step="0.01" name="descuento" id="inp-desc" value="0" min="0" oninput="calcTotal()">
-
-        <!-- Toggle ¿Aplica IGV? -->
-        <label class="form-label mt-2">¿Aplica IGV?</label>
-        <div class="igv-toggle">
-          <label class="igv-opt">
-            <input type="radio" name="aplica_igv" value="1" checked onchange="toggleIgv()">
-            <span class="igv-pill"><span class="igv-ico">✓</span><span>Sí (gravado)</span></span>
-          </label>
-          <label class="igv-opt">
-            <input type="radio" name="aplica_igv" value="0" onchange="toggleIgv()">
-            <span class="igv-pill"><span class="igv-ico">○</span><span>No (exonerado)</span></span>
-          </label>
+        <!-- DESC. + IGV + NOTAS -->
+        <div class="form-group">
+          <label class="form-label">Descuento (S/.)</label>
+          <input class="form-input" type="number" step="0.01" name="descuento" id="inp-desc" value="0" min="0" oninput="calcTotal()">
+          <label class="form-label mt-2">¿Aplica IGV?</label>
+          <div class="igv-toggle">
+            <label class="igv-opt">
+              <input type="radio" name="aplica_igv" value="1" checked onchange="toggleIgv()">
+              <span class="igv-pill"><span class="igv-ico">✓</span><span>Sí (gravado)</span></span>
+            </label>
+            <label class="igv-opt">
+              <input type="radio" name="aplica_igv" value="0" onchange="toggleIgv()">
+              <span class="igv-pill"><span class="igv-ico">○</span><span>No (exonerado)</span></span>
+            </label>
+          </div>
+          <div id="igv-info" class="mt-2" style="font-size:11.5px;padding:9px 12px;border-radius:8px;background:#e8f8f7;border:1px solid #b8e6e3;color:#0f6b65">
+            ℹ Los precios <strong>incluyen IGV (18%)</strong>. Se desglosa automáticamente en el comprobante.
+          </div>
+          <style>
+            .igv-toggle { display:grid;grid-template-columns:1fr 1fr;gap:6px }
+            .igv-opt { position:relative;cursor:pointer;user-select:none;margin:0 }
+            .igv-opt input { position:absolute;opacity:0;width:0;height:0;pointer-events:none }
+            .igv-pill { display:flex;align-items:center;justify-content:center;gap:6px; padding:7px 10px;border-radius:8px;font-size:12.5px;font-weight:600; background:#f5f7fa;color:#6b7280; border:1.5px solid #d1d5db; transition:all .15s ease;line-height:1 }
+            .igv-ico { width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:#fff;color:transparent;border:1.5px solid #9ca3af;font-size:11px;font-weight:900;flex-shrink:0 }
+            .igv-opt:hover .igv-pill { border-color:#1ea8a1;color:#0f6b65;background:#fff }
+            .igv-opt input:checked ~ .igv-pill { background:#1ea8a1;color:#ffffff;border-color:#158a83;box-shadow:0 2px 6px rgba(30,168,161,.3) }
+            .igv-opt input:checked ~ .igv-pill .igv-ico { background:#ffffff;color:#1ea8a1;border-color:#ffffff }
+          </style>
+          <div class="form-group mt-2"><label class="form-label">Notas</label><input class="form-input" name="notas" placeholder="Observaciones del comprobante"></div>
         </div>
-        <div id="igv-info" class="mt-2" style="font-size:11.5px;padding:9px 12px;border-radius:8px;background:#e8f8f7;border:1px solid #b8e6e3;color:#0f6b65">
-          ℹ Los precios <strong>incluyen IGV (18%)</strong>. Se desglosa automáticamente en el comprobante.
-        </div>
-        <style>
-          .igv-toggle { display:grid;grid-template-columns:1fr 1fr;gap:6px }
-          .igv-opt { position:relative;cursor:pointer;user-select:none;margin:0 }
-          .igv-opt input { position:absolute;opacity:0;width:0;height:0;pointer-events:none }
-          .igv-pill {
-            display:flex;align-items:center;justify-content:center;gap:6px;
-            padding:8px 10px;border-radius:9px;font-size:12.5px;font-weight:600;
-            background:#f5f7fa;color:#6b7280;
-            border:1.5px solid #d1d5db;
-            transition:all .15s ease;
-            line-height:1;
-          }
-          .igv-ico {
-            width:18px;height:18px;border-radius:50%;
-            display:inline-flex;align-items:center;justify-content:center;
-            background:#fff;color:transparent;
-            border:1.5px solid #9ca3af;
-            font-size:12px;font-weight:900;
-            flex-shrink:0;
-          }
-          .igv-opt:hover .igv-pill { border-color:#1ea8a1;color:#0f6b65;background:#fff }
-          /* === Estado ACTIVO === */
-          .igv-opt input:checked ~ .igv-pill {
-            background:#1ea8a1;
-            color:#ffffff;
-            border-color:#158a83;
-            box-shadow:0 2px 8px rgba(30,168,161,.35);
-          }
-          .igv-opt input:checked ~ .igv-pill .igv-ico {
-            background:#ffffff;
-            color:#1ea8a1;
-            border-color:#ffffff;
-          }
-          .igv-opt input:focus-visible ~ .igv-pill { outline:2px solid #158a83;outline-offset:2px }
-        </style>
+      </div><!-- /form-col-left -->
 
-        <div class="form-group mt-2"><label class="form-label">Notas</label><input class="form-input" name="notas" placeholder="Observaciones del comprobante"></div>
-      </div>
-      <div style="background:var(--teal-l);border:1.5px solid var(--teal);border-radius:12px;padding:16px">
-        <div class="flex justify-between text-sm mb-2"><span class="text-muted" id="lbl-tot-sub">Op. Gravadas:</span><span id="tot-sub">S/. 0.00</span></div>
-        <div class="flex justify-between text-sm mb-2"><span class="text-muted">Descuento:</span><span id="tot-desc" style="color:var(--red)">-S/. 0.00</span></div>
-        <div class="flex justify-between text-sm mb-2" id="row-tot-igv"><span class="text-muted">IGV (18%):</span><span id="tot-igv">S/. 0.00</span></div>
-        <div style="border-top:1.5px solid var(--teal);padding-top:10px;margin-top:4px" class="flex justify-between"><span style="font-size:16px;font-weight:800;color:var(--teal-d)">Total:</span><span id="tot-total" style="font-size:20px;font-weight:800;color:var(--teal-d)">S/. 0.00</span></div>
-      </div>
-    </div>
-    <div class="flex gap-1 mt-2">
-      <button type="submit" class="btn btn-primary" style="flex:1;justify-content:center">🧾 Emitir comprobante</button>
-      <a href="?p=facturacion" class="btn">Cancelar</a>
-    </div>
+      <div class="form-col-right"><!-- COLUMNA DERECHA -->
+        <div style="background:var(--teal-l);border:1.5px solid var(--teal);border-radius:12px;padding:16px;margin-bottom:12px">
+          <div class="flex justify-between text-sm mb-2"><span class="text-muted" id="lbl-tot-sub">Op. Gravadas:</span><span id="tot-sub">S/. 0.00</span></div>
+          <div class="flex justify-between text-sm mb-2"><span class="text-muted">Descuento:</span><span id="tot-desc" style="color:var(--red)">-S/. 0.00</span></div>
+          <div class="flex justify-between text-sm mb-2" id="row-tot-igv"><span class="text-muted">IGV (18%):</span><span id="tot-igv">S/. 0.00</span></div>
+          <div style="border-top:1.5px solid var(--teal);padding-top:10px;margin-top:4px" class="flex justify-between"><span style="font-size:16px;font-weight:800;color:var(--teal-d)">Total:</span><span id="tot-total" style="font-size:20px;font-weight:800;color:var(--teal-d)">S/. 0.00</span></div>
+        </div>
+
+        <!-- ── MÉTODOS DE PAGO MÚLTIPLES ── -->
+        <div style="border:1.5px solid var(--teal);border-radius:12px;padding:12px 14px;background:var(--teal-l)">
+          <div class="flex items-center justify-between mb-2">
+            <label class="form-label" style="margin:0;font-weight:700;color:var(--teal-d)">💰 Métodos de pago</label>
+            <button type="button" onclick="abrirModalMetodoPago()" style="background:none;border:none;color:var(--teal-d);cursor:pointer;font-size:12px;text-decoration:underline">⚙️ Editar</button>
+          </div>
+          <div id="lista-metodos-pago-ui" style="margin-bottom:8px"></div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="sel-nuevo-metodo" class="form-input" style="flex:1">
+              <?php foreach($metodos_pago_list as $m): ?>
+                <option value="<?= strtolower(str_replace(' ','_',$m['nombre'])) ?>"><?= clean($m['nombre']) ?></option>
+              <?php endforeach; ?>
+            </select>
+            <div style="position:relative;flex:none">
+              <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:13px">S/.</span>
+              <input type="number" id="inp-monto-metodo" class="form-input" placeholder="0.00" min="0" step="0.01" style="padding-left:32px;width:110px">
+            </div>
+            <button type="button" onclick="agregarFilaPago()" style="background:var(--primary);border:none;border-radius:8px;cursor:pointer;font-size:13px;padding:7px 14px;color:white">+</button>
+          </div>
+          <input type="hidden" name="pagos_json" id="pagos-json" value="[]">
+          <div id="pago-total-msg" style="margin-top:6px;font-size:12px;font-weight:600"></div>
+        </div>
+
+        <div class="flex gap-1" style="margin-top:10px">
+          <button type="submit" class="btn btn-primary" style="flex:1;justify-content:center" id="btn-emitir">🧾 Emitir comprobante</button>
+          <a href="?p=facturacion" class="btn">Cancelar</a>
+        </div>
+      </div><!-- /form-col-right -->
+    </div><!-- /form-body -->
   </form>
 </div>
-
-<!-- ═══ MODAL NUEVO CLIENTE (desde RENIEC/SUNAT) ═══ -->
+        <!-- ═══ MODAL NUEVO CLIENTE (desde RENIEC/SUNAT) ═══ -->
 <div id="modalNuevoCliente" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center">
   <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;width:460px;max-width:95vw">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)">
@@ -590,6 +586,12 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
           <input type="text" id="new-dni" class="form-input" maxlength="8" placeholder="8 dígitos"></div>
         <div class="form-group"><label class="form-label">RUC</label>
           <input type="text" id="new-ruc" class="form-input" maxlength="11" placeholder="11 dígitos"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Carné Extranjería</label>
+          <input type="text" id="new-ce" class="form-input" maxlength="15" placeholder="9+ dígitos"></div>
+        <div class="form-group"><label class="form-label">Pasaporte</label>
+          <input type="text" id="new-pasaporte" class="form-input" maxlength="20" placeholder="Número Pasaporte"></div>
       </div>
       <div class="form-group"><label class="form-label">Teléfono</label>
         <input type="text" id="new-telefono" class="form-input" placeholder="+51 987 654 321"></div>
@@ -614,10 +616,10 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
     </div>
     <div style="padding:16px">
       <div id="lista-metodos-pago" style="margin-bottom:14px">
-        <?php foreach($metodos_pago_cfg as $ck => $mv): $idx = str_replace('metodo_pago_','',$ck); ?>
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg3);border-radius:8px;margin-bottom:6px" id="mp-row-<?= $idx ?>">
-            <span style="font-weight:600"><?= clean($mv) ?></span>
-            <button type="button" onclick="eliminarMetodoPago('<?= $idx ?>')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px" title="Eliminar">✕</button>
+        <?php foreach($metodos_pago_list as $m): ?>
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg3);border-radius:8px;margin-bottom:6px" id="mp-row-<?= $m['id'] ?>">
+            <span style="font-weight:600"><?= clean($m['nombre']) ?></span>
+            <button type="button" onclick="eliminarMetodoPago('<?= $m['id'] ?>')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px" title="Eliminar">✕</button>
           </div>
         <?php endforeach; ?>
       </div>
@@ -698,7 +700,15 @@ $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>
     <?php endif; ?>
     <?php if ($_aplica): ?><div class="text-sm text-muted mb-1">IGV (18%): S/. <?= number_format($venta_detalle['igv'],2) ?></div><?php endif; ?>
     <div style="font-size:22px;font-weight:800;color:var(--teal-d)">Total: S/. <?= number_format($venta_detalle['total'],2) ?></div>
-    <div class="text-xs text-muted mt-1">Método: <?= ucfirst(str_replace('_',' ',$venta_detalle['metodo_pago'])) ?></div>
+    <div class="text-xs text-muted mt-1">
+      <?php
+      $pagosLinea = [];
+      foreach ($pagos_detalle as $p) {
+          $pagosLinea[] = ucfirst(str_replace('_',' ',$p['metodo_pago'])) . ': S/. ' . number_format($p['monto'], 2);
+      }
+      echo implode(' + ', $pagosLinea);
+      ?>
+    </div>
   </div>
 
   <!-- OPCIONES IMPRESIÓN -->
@@ -985,19 +995,47 @@ function actualizarSerieNum() {
     if (numeroEl) numeroEl.value = d.numero;
 }
 
+// ── ACTUALIZAR PLACEHOLDER SEGÚN TIPO DE DOCUMENTO ──
+function actualizarPlaceHolderDoc() {
+    var tipo = document.getElementById('sel-tipodoc').value;
+    var placeholder = '🔍 Ingresa el número de documento...';
+    if (tipo === 'dni') placeholder = '🔍 Ingresa el DNI (8 dígitos)...';
+    else if (tipo === 'ruc') placeholder = '🔍 Ingresa el RUC (11 dígitos)...';
+    else if (tipo === 'ce') placeholder = '🔍 Ingresa el Carné de Extranjería (9+ dígitos)...';
+    else if (tipo === 'pasaporte') placeholder = '🔍 Ingresa el número de Pasaporte...';
+    document.getElementById('cli-busq').placeholder = placeholder;
+}
+
 // ── BOTÓN CONSULTAR (lupa) → buscar en RENIEC/SUNAT ──
 async function btnBuscarCliente() {
     var q = (document.getElementById('cli-busq').value || '').trim();
-    if (!q) { alert('Escribe un DNI (8 dígitos) o RUC (11 dígitos) en el campo de búsqueda'); return; }
-    var isDni = /^\d{8}$/.test(q);
-    var isRuc = /^\d{11}$/.test(q);
-    if (!isDni && !isRuc) { alert('Escribe un número de 8 dígitos (DNI) o 11 dígitos (RUC)'); return; }
+    if (!q) { alert('Ingresa el número de documento.'); return; }
+
+    var tipo = document.getElementById('sel-tipodoc').value;
+    var isDni = tipo === 'dni' && /^\d{8}$/.test(q);
+    var isRuc = tipo === 'ruc' && /^\d{11}$/.test(q);
+    var isCe  = tipo === 'ce'  && q.length >= 9;
+    var isPas = tipo === 'pasaporte' && q.length >= 5;
+
+    if (!isDni && !isRuc && !isCe && !isPas) {
+        var msg = tipo === 'dni'   ? 'El DNI debe tener 8 dígitos.'
+                : tipo === 'ruc'   ? 'El RUC debe tener 11 dígitos.'
+                : tipo === 'ce'    ? 'El Carné de Extranjería debe tener al menos 9 dígitos.'
+                : 'El Pasaporte debe tener al menos 5 caracteres.';
+        alert(msg); return;
+    }
+
+    // CE y Pasaporte no tienen consulta automática → pre-llenar modal con el número
+    if (tipo === 'ce' || tipo === 'pasaporte') {
+        abrirModalNuevoCliente('', '', '', '', tipo, q);
+        return;
+    }
 
     var btn = document.getElementById('btnCliSearch');
     btn.disabled = true; btn.textContent = '⏳';
 
     try {
-        var r = await fetch('<?= BASE_URL ?>/api/consulta_documento.php?tipo=' + (isDni ? 'dni' : 'ruc') + '&numero=' + q);
+        var r = await fetch('<?= BASE_URL ?>/api/consulta_documento.php?tipo=' + tipo + '&numero=' + q);
         var j = await r.json();
 
         if (!j.ok) {
@@ -1017,13 +1055,28 @@ async function btnBuscarCliente() {
 }
 
 // ── MODAL NUEVO CLIENTE DESDE API (vanilla JS) ──
-function abrirModalNuevoCliente(nombre, dni, ruc, direccion) {
-    document.getElementById('new-nombre').value = nombre || '';
+function abrirModalNuevoCliente(nombre, dni, ruc, direccion, tipo, numDoc) {
+    var nomField = document.getElementById('new-nombre');
+    nomField.value = nombre || '';
+    // CE y Pasaporte no tienen consulta → placeholder es genérico
+    if (tipo === 'ce' || tipo === 'pasaporte') {
+        nomField.placeholder = 'Ingresa el nombre completo del cliente';
+        nomField.focus();
+    } else {
+        nomField.placeholder = 'Nombre obtenido de la consulta';
+    }
     document.getElementById('new-dni').value    = dni    || '';
     document.getElementById('new-ruc').value    = ruc    || '';
+    document.getElementById('new-ce').value    = '';
+    document.getElementById('new-pasaporte').value = '';
     document.getElementById('new-telefono').value = '';
     document.getElementById('new-email').value    = '';
     document.getElementById('new-direccion').value = direccion || '';
+    if (tipo === 'ce') {
+        document.getElementById('new-ce').value = numDoc || '';
+    } else if (tipo === 'pasaporte') {
+        document.getElementById('new-pasaporte').value = numDoc || '';
+    }
     var modal = document.getElementById('modalNuevoCliente');
     modal.style.display = 'flex';
     document.body.insertAdjacentHTML('beforeend', '<div id="modalBackdrop" style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:998"></div>');
@@ -1049,47 +1102,47 @@ async function agregarMetodoPago() {
         var r = await fetch('?p=facturacion&action=nueva', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'action=add_metodo_pago&nombre_metodo=' + encodeURIComponent(nombre)
+            body: 'action=add_metodo_pago&nombre=' + encodeURIComponent(nombre)
         });
         var j = await r.json();
         if (!j.ok) { alert('Error al guardar'); return; }
-        var idx = document.querySelectorAll('#lista-metodos-pago > div').length + 1;
-        var html = '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg3);border-radius:8px;margin-bottom:6px" id="mp-row-' + idx + '">'
+        var n = document.querySelectorAll('#lista-metodos-pago > div').length + 1;
+        var html = '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg3);border-radius:8px;margin-bottom:6px" id="mp-row-' + n + '">'
                  + '<span style="font-weight:600">' + nombre + '</span>'
-                 + '<button type="button" onclick="eliminarMetodoPago(\'' + idx + '\')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px" title="Eliminar">✕</button>'
+                 + '<button type="button" onclick="eliminarMetodoPago(' + n + ')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px" title="Eliminar">✕</button>'
                  + '</div>';
         document.getElementById('lista-metodos-pago').insertAdjacentHTML('beforeend', html);
-        // Agregar al select
         var opt = document.createElement('option');
         opt.value = nombre.toLowerCase().replace(/\s+/g,'_');
         opt.textContent = nombre;
         document.getElementById('sel-metodo-pago').appendChild(opt);
         document.getElementById('new-nombre-metodo').value = '';
-        // Recargar la página para que se actualice la lista en PHP
         setTimeout(function(){ location.reload(); }, 500);
     } catch(e) { alert('Error: ' + e.message); }
 }
 
-async function eliminarMetodoPago(idx) {
+async function eliminarMetodoPago(id) {
     if (!confirm('¿Eliminar este método de pago?')) return;
     try {
         var r = await fetch('?p=facturacion&action=nueva', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'action=del_metodo_pago&idx=' + idx
+            body: 'action=del_metodo_pago&id=' + id
         });
-        var el = document.getElementById('mp-row-' + idx);
+        var el = document.getElementById('mp-row-' + id);
         if (el) el.remove();
         setTimeout(function(){ location.reload(); }, 300);
     } catch(e) { alert('Error: ' + e.message); }
 }
 
 async function guardarNuevoCliente() {
-    var nombre   = document.getElementById('new-nombre').value.trim();
-    var dni      = document.getElementById('new-dni').value.trim();
-    var ruc      = document.getElementById('new-ruc').value.trim();
-    var telefono = document.getElementById('new-telefono').value.trim();
-    var email    = document.getElementById('new-email').value.trim();
+    var nombre    = document.getElementById('new-nombre').value.trim();
+    var dni       = document.getElementById('new-dni').value.trim();
+    var ruc       = document.getElementById('new-ruc').value.trim();
+    var ce        = document.getElementById('new-ce').value.trim();
+    var pasaporte = document.getElementById('new-pasaporte').value.trim();
+    var telefono  = document.getElementById('new-telefono').value.trim();
+    var email     = document.getElementById('new-email').value.trim();
     var direccion = document.getElementById('new-direccion').value.trim();
 
     if (!nombre) { alert('El nombre es obligatorio'); return; }
@@ -1101,12 +1154,12 @@ async function guardarNuevoCliente() {
         var r = await fetch('<?= BASE_URL ?>/api/cliente_crear.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ nombre, dni, ruc, telefono, email, direccion })
+            body: JSON.stringify({ nombre, dni, ruc, ce, pasaporte, telefono, email, direccion })
         });
         var j = await r.json();
         if (!j.ok) { alert(j.error || 'No se pudo crear'); return; }
 
-        var nuevo = { id: j.id, nombre: j.nombre, dni: j.dni || '', ruc: j.ruc || '' };
+        var nuevo = { id: j.id, nombre: j.nombre, dni: j.dni || '', ruc: j.ruc || '', ce: j.ce || '', pasaporte: j.pasaporte || '' };
         CLIENTES.push(nuevo);
         seleccionarCliente(nuevo);
         cerrarModalNuevoCliente();
@@ -1244,7 +1297,12 @@ function seleccionarCliente(c) {
     document.getElementById('cli-busq').value = c.nombre;
     document.getElementById('cli-drop').style.display = 'none';
     document.getElementById('cli-sel').style.display  = 'flex';
-    document.getElementById('cli-sel-nom').textContent = c.nombre + (c.dni?' · DNI '+c.dni:'') + (c.ruc?' · RUC '+c.ruc:'');
+    var label = c.nombre;
+    if (c.dni) label += ' · DNI ' + c.dni;
+    else if (c.ruc) label += ' · RUC ' + c.ruc;
+    else if (c.ce) label += ' · CE ' + c.ce;
+    else if (c.pasaporte) label += ' · Pas. ' + c.pasaporte;
+    document.getElementById('cli-sel-nom').textContent = label;
     document.getElementById('cli-busq').style.display = 'none';
 
     // Habilitar campo mascota y precargar mascotas del cliente
@@ -1432,8 +1490,6 @@ function calcSubtotal(idx) {
 }
 
 function calcTotal() {
-  // Convención (aplica_igv=1): el precio del item YA INCLUYE IGV → se desglosa.
-  // Si aplica_igv=0: exonerado/inafecto → no hay desglose, base = total cobrado.
   var sumaBruta = 0;
   document.querySelectorAll('.item-row').forEach(row => {
     var qty   = parseFloat(row.querySelector('[name="item_qty[]"]')?.value  || 1);
@@ -1457,6 +1513,27 @@ function calcTotal() {
   document.getElementById('tot-desc').textContent  = '-S/. ' + desc.toFixed(2);
   document.getElementById('tot-igv').textContent   = 'S/. ' + igv.toFixed(2);
   document.getElementById('tot-total').textContent = 'S/. ' + total.toFixed(2);
+
+  updatePagoBtnState(total);
+}
+
+function updatePagoBtnState(totalVenta) {
+  var sumPagos = pagosUI.reduce(function(s, p) { return s + p.monto; }, 0);
+  var diff = totalVenta - sumPagos;
+  var btnAdd = document.querySelector('button[onclick="agregarFilaPago()"]');
+  if (!btnAdd) return;
+  btnAdd.disabled = diff <= 0.01;
+  btnAdd.style.opacity = diff <= 0.01 ? '0.4' : '1';
+  btnAdd.style.cursor = diff <= 0.01 ? 'not-allowed' : 'pointer';
+  var msg = totalVenta > 0 ? 'Total venta: S/. ' + totalVenta.toFixed(2) : '';
+  if (pagosUI.length > 0) {
+    msg += ' · Pagado: S/. ' + sumPagos.toFixed(2);
+    if (diff > 0.01) msg += ' <span style="color:var(--red)">· Faltan: S/. ' + diff.toFixed(2) + '</span>';
+    else if (diff < -0.01) msg += ' <span style="color:var(--orange)">· Exceso: S/. ' + Math.abs(diff).toFixed(2) + '</span>';
+    else msg += ' <span style="color:var(--teal-d)">✓ Cuadrado</span>';
+  }
+  var msgEl = document.getElementById('pago-total-msg');
+  if (msgEl) msgEl.innerHTML = msg;
 }
 
 function toggleIgv() {
@@ -1499,10 +1576,83 @@ document.getElementById('venta-form')?.addEventListener('submit', function(e) {
     var p = parseFloat(row.querySelector('[name="item_precio[]"]')?.value || 0);
     if (p > 0) valid = true;
   });
-  if (!valid) {
-    e.preventDefault();
-    alert('Todos los ítems deben tener un precio mayor a 0.');
-  }
+if (pagosUI.length === 0) {
+        alert('Agrega al menos un método de pago.');
+        return;
+    }
+    var sumPagos = pagosUI.reduce(function(s, p) { return s + p.monto; }, 0);
+    var totalVenta = parseFloat(document.getElementById('tot-total').textContent.replace(/[S\/.\s]/g, '').replace(',', '.')) || 0;
+    if (Math.abs(sumPagos - totalVenta) > 0.02) {
+        alert('La suma de los pagos (S/. ' + sumPagos.toFixed(2) + ') no coincide con el total (S/. ' + totalVenta.toFixed(2) + ').');
+        return;
+    }
+    if (!valid) {
+        e.preventDefault();
+        alert('Todos los ítems deben tener un precio mayor a 0.');
+    }
+});
+
+// ── MULTI-PAYMENT METHODS ──
+var pagosUI = [];
+
+function agregarFilaPago() {
+    var sel = document.getElementById('sel-nuevo-metodo');
+    var inpMonto = document.getElementById('inp-monto-metodo');
+    var btnAdd = sel.closest('.form-row').querySelector('button');
+
+    var metodo = sel.value;
+    var monto = parseFloat(inpMonto.value);
+    var totalVenta = parseFloat(document.getElementById('tot-total').textContent.replace(/[S\/.\s]/g, '').replace(',', '.')) || 0;
+    var sumPagos = pagosUI.reduce(function(s, p) { return s + p.monto; }, 0);
+    var diff = totalVenta - sumPagos;
+
+    if (!metodo) { alert('Selecciona un método de pago.'); return; }
+    if (isNaN(monto) || monto <= 0) { alert('Ingresa un monto mayor a 0.'); return; }
+    if (diff <= 0.01) {
+        alert('El total ya está cubierto. No puedes agregar más métodos de pago.');
+        return;
+    }
+
+    if (monto > diff + 0.01) {
+        alert('El monto excede lo que falta pagar (S/. ' + diff.toFixed(2) + '). Ajusta el monto o usa otro método.');
+        return;
+    }
+
+    pagosUI.push({ metodo: metodo, monto: monto });
+    inpMonto.value = '';
+    renderPagosUI();
+}
+
+function eliminarFilaPago(idx) {
+    pagosUI.splice(idx, 1);
+    renderPagosUI();
+}
+
+function renderPagosUI() {
+    var container = document.getElementById('lista-metodos-pago-ui');
+    var totalVenta = parseFloat(document.getElementById('tot-total').textContent.replace(/[S\/.\s]/g, '').replace(',', '.')) || 0;
+    var sumPagos = pagosUI.reduce(function(s, p) { return s + p.monto; }, 0);
+    var diff = totalVenta - sumPagos;
+
+    var html = '';
+    pagosUI.forEach(function(p, i) {
+        var label = p.metodo.charAt(0).toUpperCase() + p.metodo.slice(1).replace(/_/g, ' ');
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 10px;background:var(--bg3);border-radius:6px;margin-bottom:4px">'
+              + '<span style="font-size:13px">' + label + '</span>'
+              + '<div style="display:flex;align-items:center;gap:8px">'
+              + '<span style="font-weight:600;font-size:13px">S/. ' + p.monto.toFixed(2) + '</span>'
+              + '<button type="button" onclick="eliminarFilaPago(' + i + ')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:13px">✕</button>'
+              + '</div></div>';
+    });
+    container.innerHTML = html;
+
+    document.getElementById('pagos-json').value = JSON.stringify(pagosUI);
+    updatePagoBtnState(totalVenta);
+}
+
+// Si no hay ningún pago cargado y hay total > 0, pre-cargar efectivo
+window.addEventListener('DOMContentLoaded', function() {
+    renderPagosUI();
 });
 </script>
 
