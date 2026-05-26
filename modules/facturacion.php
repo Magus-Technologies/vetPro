@@ -1624,8 +1624,7 @@ var pagosUI = [];
 
 function agregarFilaPago() {
     var sel = document.getElementById('sel-nuevo-metodo');
-    var inpMonto = document.getElementById('inp-monto-metodo');
-    var btnAdd = sel.closest('.form-row').querySelector('button');
+    var inpMonto = document.getElementById('inp-monto-metido');
 
     var metodo = sel.value;
     var monto = parseFloat(inpMonto.value);
