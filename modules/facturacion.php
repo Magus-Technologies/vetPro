@@ -136,7 +136,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]);
                 $venta_id = (int)$db->lastInsertId();
 
-                // Guardar métodos de pago (multi)
                 $pagosRaw = json_decode($_POST['pagos_json'] ?? '[]', true);
                 $pagosOk = is_array($pagosRaw) ? $pagosRaw : [];
                 if (count($pagosOk) === 0) {
@@ -151,40 +150,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 foreach ($items_ok as $it) {
                     $st2->execute([$venta_id, $it['tipo'], $it['ref'], $it['desc'], $it['qty'], $it['precio'], $it['sub']]);
                 }
+
+                // ── Generación de XML ANTES del commit ──
+                // Si falla SUNAT para factura/boleta, se hace ROLLBACK y no se crea la venta.
+                $sunat_xml_generado = null;
+                if (in_array($tipo, ['factura', 'boleta'], true)) {
+                    $sunat_cfg = __DIR__ . '/../includes/config_sunat.php';
+                    $sunat_svc = __DIR__ . '/../includes/sunat/SunatService.php';
+                    if (file_exists($sunat_cfg) && file_exists($sunat_svc)) {
+                        require_once $sunat_cfg;
+                        require_once $sunat_svc;
+                        $sunat = new SunatService($db);
+                        $resul = $sunat->generarXml($venta_id);
+                        if (!$resul['ok']) {
+                            // XML falló — rollback total, no se registra nada
+                            $db->rollBack();
+                            $_SESSION['flash_error'] = 'SUNAT_ERROR: ' . $resul['mensaje'];
+                            header('Location: '.BASE_URL.'/index.php?p=facturacion&action=nueva&msg=sunat_fail');
+                            exit;
+                        }
+                        $sunat_xml_generado = $resul['xml'] ?? null;
+                    }
+                }
+
+                // Todo OK → commit
                 $db->commit();
+
+                // Movimiento de caja (post-commit, no es crítico)
+                $caja = $db->query("SELECT id FROM cajas WHERE estado='abierta' ORDER BY id DESC LIMIT 1")->fetchColumn();
+                if ($caja) {
+                    $stCaja = $db->prepare("INSERT INTO movimientos_caja (caja_id,usuario_id,tipo,concepto,monto,metodo_pago,categoria,venta_id) VALUES (?,?,'ingreso',?,?,?,'servicio',?)");
+                    foreach ($pagosOk as $p) {
+                        $stCaja->execute([$caja, $user['id'], "Venta $serie-".str_pad($numero,5,'0',STR_PAD_LEFT), (float)$p['monto'], $p['metodo'], $venta_id]);
+                    }
+                }
+
+                $_SESSION['flash_ok'] = $sunat_xml_generado
+                    ? 'Venta registrada. XML generado correctamente.'
+                    : 'Venta registrada (PDF/ticket sin XML SUNAT).';
+                header('Location: '.BASE_URL.'/index.php?p=facturacion&action=ver&id='.$venta_id);
+                exit;
             } catch (Throwable $e) {
                 $db->rollBack();
-                throw $e;
+                $_SESSION['flash_error'] = 'Error al guardar venta: ' . $e->getMessage();
+                header('Location: '.BASE_URL.'/index.php?p=facturacion&action=nueva&msg=db_error');
+                exit;
             }
-
-            // Movimiento de caja (multi-método)
-            $caja = $db->query("SELECT id FROM cajas WHERE estado='abierta' ORDER BY id DESC LIMIT 1")->fetchColumn();
-            if ($caja) {
-                $metodoPrincipal = count($pagosOk) > 0 ? $pagosOk[0]['metodo'] : 'efectivo';
-                $stCaja = $db->prepare("INSERT INTO movimientos_caja (caja_id,usuario_id,tipo,concepto,monto,metodo_pago,categoria,venta_id) VALUES (?,?,'ingreso',?,?,?,'servicio',?)");
-                foreach ($pagosOk as $p) {
-                    $stCaja->execute([$caja, $user['id'], "Venta $serie-".str_pad($numero,5,'0',STR_PAD_LEFT), (float)$p['monto'], $p['metodo'], $venta_id]);
-                }
-            }
-
-            // Generación de XML (solo factura/boleta) — NO se envía a SUNAT todavía.
-            // El envío se hace luego con el botón "Enviar a SUNAT".
-            $msg_extra = '';
-            if (in_array($tipo, ['factura', 'boleta'], true)) {
-                $sunat_cfg = __DIR__ . '/../includes/config_sunat.php';
-                $sunat_svc = __DIR__ . '/../includes/sunat/SunatService.php';
-                if (file_exists($sunat_cfg) && file_exists($sunat_svc)) {
-                    require_once $sunat_cfg;
-                    require_once $sunat_svc;
-                    $sunat = new SunatService($db);
-                    $resul = $sunat->generarXml($venta_id);
-                    $msg_extra = '&sunat=' . ($resul['ok'] ? 'xml_ok' : 'xml_err')
-                               . '&sunat_msg=' . urlencode($resul['mensaje']);
-                }
-            }
-
-            header('Location: '.BASE_URL.'/index.php?p=facturacion&action=ver&id='.$venta_id.'&msg=nuevo'.$msg_extra);
-            exit;
         }
         end_save_block:;
     }
@@ -394,6 +405,13 @@ $_series_sede_actual = $_series_fac[$_sede_fac] ?? $_series_fac[1] ?? [];
 // Datos JS clientes y mascotas
 $_cli_js = array_map(fn($c)=>['id'=>$c['id'],'nombre'=>$c['nombre'],'dni'=>$c['dni']??'','ruc'=>$c['ruc']??'','ce'=>$c['ce']??'','pasaporte'=>$c['pasaporte']??''], $clientes_sel);
 $_mas_js = array_map(fn($m)=>['id'=>$m['id'],'label'=>$m['label'],'cliente_id'=>$m['cliente_id']], $mascotas_sel);
+if (isset($_SESSION['flash_error'])) {
+    echo '<div class="alert alert-danger mb-3" style="padding:12px 16px;border-radius:8px;font-size:14px">❌ ' . htmlspecialchars($_SESSION['flash_error']) . '</div>';
+    unset($_SESSION['flash_error']);
+} elseif (isset($_SESSION['flash_ok'])) {
+    echo '<div class="alert alert-success mb-3" style="padding:12px 16px;border-radius:8px;font-size:14px">✅ ' . htmlspecialchars($_SESSION['flash_ok']) . '</div>';
+    unset($_SESSION['flash_ok']);
+}
 ?>
 <div class="card" style="max-width:1400px;width:100%">
   <div class="sec-header mb-3"><div class="sec-title">Nueva Venta</div><a href="?p=facturacion" class="btn btn-sm btn-ghost">← Volver</a></div>
