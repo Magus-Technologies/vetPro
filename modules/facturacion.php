@@ -1608,7 +1608,8 @@ if (pagosUI.length === 0) {
         return;
     }
     var sumPagos = pagosUI.reduce(function(s, p) { return s + p.monto; }, 0);
-    var totalVenta = parseFloat(document.getElementById('tot-total').textContent.replace(/[S\/.\s]/g, '').replace(',', '.')) || 0;
+    var _txt = document.getElementById('tot-total').textContent;
+    var totalVenta = parseFloat((_txt.match(/\d[\d.,-]*/) || ['0'])[0].replace(',', '.')) || 0;
     if (Math.abs(sumPagos - totalVenta) > 0.02) {
         alert('La suma de los pagos (S/. ' + sumPagos.toFixed(2) + ') no coincide con el total (S/. ' + totalVenta.toFixed(2) + ').');
         return;
@@ -1628,7 +1629,8 @@ function agregarFilaPago() {
 
     var metodo = sel.value;
     var monto = parseFloat(inpMonto.value);
-    var totalVenta = parseFloat(document.getElementById('tot-total').textContent.replace(/[S\/.\s]/g, '').replace(',', '.')) || 0;
+    var _txt = document.getElementById('tot-total').textContent;
+    var totalVenta = parseFloat((_txt.match(/\d[\d.,-]*/) || ['0'])[0].replace(',', '.')) || 0;
     var sumPagos = pagosUI.reduce(function(s, p) { return s + p.monto; }, 0);
     var diff = totalVenta - sumPagos;
 
@@ -1656,7 +1658,8 @@ function eliminarFilaPago(idx) {
 
 function renderPagosUI() {
     var container = document.getElementById('lista-metodos-pago-ui');
-    var totalVenta = parseFloat(document.getElementById('tot-total').textContent.replace(/[S\/.\s]/g, '').replace(',', '.')) || 0;
+    var _txt = document.getElementById('tot-total').textContent;
+    var totalVenta = parseFloat((_txt.match(/\d[\d.,-]*/) || ['0'])[0].replace(',', '.')) || 0;
     var sumPagos = pagosUI.reduce(function(s, p) { return s + p.monto; }, 0);
     var diff = totalVenta - sumPagos;
 
