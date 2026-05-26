@@ -122,7 +122,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // dejar la venta con totales que NO coinciden con sus items en BD.
             $db->beginTransaction();
             try {
-                $st = $db->prepare("INSERT INTO ventas (sede_id,cliente_id,mascota_id,usuario_id,tipo_comprobante,serie,numero,subtotal,igv,aplica_igv,descuento,total,metodo_pago,estado,notas) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                $st = $db->prepare("INSERT INTO ventas (sede_id,cliente_id,mascota_id,usuario_id,tipo_comprobante,serie,numero,subtotal,igv,aplica_igv,descuento,total,metodo_pago,estado,notas) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'pagado',?)");
                 $st->execute([
                     $user['sede_id'] ?? getSede(),
                     $cliente_id,
@@ -130,8 +130,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $user['id'],
                     $tipo, $serie, $numero,
                     $subtotal, $igv, $aplica_igv, $descuento, $total,
-                    'multi',
-                    'pagado',
+                    'efectivo',  // placeholder, se actualiza abajo con el método real
                     trim($_POST['notas'] ?? '')
                 ]);
                 $venta_id = (int)$db->lastInsertId();
@@ -145,6 +144,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 foreach ($pagosOk as $p) {
                     $stPago->execute([$venta_id, $p['metodo'], (float)$p['monto']]);
                 }
+
+                // Si solo hay 1 método, guardar el nombre real
+                // Si hay múltiples, concatenar todos: "yape + efectivo"
+                $metodoFinal = count($pagosOk) === 1
+                    ? $pagosOk[0]['metodo']
+                    : implode(' + ', array_column($pagosOk, 'metodo'));
 
                 $st2 = $db->prepare("INSERT INTO venta_items (venta_id,tipo,referencia_id,descripcion,cantidad,precio_unitario,subtotal) VALUES (?,?,?,?,?,?,?)");
                 foreach ($items_ok as $it) {
@@ -172,6 +177,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $sunat_xml_generado = $resul['xml'] ?? null;
                     }
                 }
+
+                // ── Update metodo_pago real con transacción abierta ──
+                // Ya tenemos $venta_id, ahora actualizamos el metodo_pago en ventas
+                $db->prepare("UPDATE ventas SET metodo_pago=? WHERE id=?")->execute([$metodoFinal, $venta_id]);
 
                 // Todo OK → commit
                 $db->commit();
