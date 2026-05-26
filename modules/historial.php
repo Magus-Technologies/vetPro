@@ -1,16 +1,15 @@
 <?php
 $page = 'historial'; $pageTitle = 'Historia Clínica';
-require_once __DIR__ . '/../includes/header.php';
-$db = getDB();
 
-$action      = $_GET['action'] ?? 'list';
-$mascota_id  = (int)($_GET['mascota_id'] ?? 0);
-$cita_id     = (int)($_GET['cita_id']    ?? 0);
-$consulta_id = (int)($_GET['cid']        ?? 0);
-$msg = '';
-
-// ── GUARDAR CONSULTA ──
+// ── GUARDAR CONSULTA (ANTES del header para que el redirect funcione) ──
+// Si va después del header, header('Location') falla con "headers already sent"
+// → guarda pero deja la pantalla en blanco.
 if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['action']??'')==='save_consulta') {
+    require_once __DIR__ . '/../includes/config.php';
+    $db = getDB();
+    if (function_exists('requireLogin')) requireLogin();
+    $user = function_exists('getUser') ? getUser() : ($GLOBALS['user'] ?? []);
+    $cita_id = (int)($_GET['cita_id'] ?? 0);
     $fields=['mascota_id','veterinario_id','tipo','fecha','peso_actual','temperatura',
              'frecuencia_cardiaca','frecuencia_respiratoria','sintomas','diagnostico',
              'tratamiento','observaciones','proximo_control'];
@@ -34,6 +33,32 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['action']??'')==='save_consul
     $st->execute(array_merge($data,$extra_data));
     $nueva_cid=(int)$db->lastInsertId();
     if($data['cita_id']) $db->prepare("UPDATE citas SET estado='atendida' WHERE id=?")->execute([$data['cita_id']]);
+
+    // ── Próximo control → crear cita automática en la agenda ──
+    // Si el veterinario indicó una fecha de próximo control, generamos una
+    // cita tipo 'control' para que aparezca en el calendario y en la lista.
+    if (!empty($data['proximo_control'])) {
+        try {
+            $fctrl = $data['proximo_control'];
+            // Evitar duplicar si ya hay una cita de control ese día para esta mascota
+            $dup = $db->prepare("SELECT COUNT(*) FROM citas WHERE mascota_id=? AND fecha=? AND tipo='control'");
+            $dup->execute([$data['mascota_id'], $fctrl]);
+            if ((int)$dup->fetchColumn() === 0) {
+                $db->prepare(
+                    "INSERT INTO citas (sede_id,mascota_id,veterinario_id,tipo,fecha,hora,duracion_minutos,estado,motivo)
+                     VALUES (?,?,?,'control',?,?,?, 'pendiente', ?)"
+                )->execute([
+                    $data['sede_id'],
+                    $data['mascota_id'],
+                    $data['veterinario_id'],
+                    $fctrl,
+                    '09:00:00',   // hora por defecto; el vet puede reagendarla
+                    30,
+                    'Control de seguimiento (generado desde la consulta del '.date('d/m/Y').')'
+                ]);
+            }
+        } catch(Exception $e) { /* si falla, no bloquea el guardado de la consulta */ }
+    }
     if(!empty($_POST['med_nombre'][0])){
         $st2=$db->prepare("INSERT INTO recetas (consulta_id,mascota_id,veterinario_id,fecha,indicaciones) VALUES (?,?,?,CURDATE(),?)");
         $st2->execute([$nueva_cid,$data['mascota_id'],$data['veterinario_id'],trim($_POST['indicaciones']??'')]);
@@ -65,6 +90,15 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['action']??'')==='save_consul
     header('Location: '.BASE_URL.'/index.php?p=historial&mascota_id='.$mascota_id.'&cid='.$nueva_cid.'&msg=ok');
     exit;
 }
+
+require_once __DIR__ . '/../includes/header.php';
+$db = getDB();
+
+$action      = $_GET['action'] ?? 'list';
+$mascota_id  = (int)($_GET['mascota_id'] ?? 0);
+$cita_id     = (int)($_GET['cita_id']    ?? 0);
+$consulta_id = (int)($_GET['cid']        ?? 0);
+$msg = $_GET['msg'] ?? '';
 
 $vets_sel=$db->query("SELECT id,nombre FROM usuarios WHERE rol IN ('veterinario','admin') AND activo=1")->fetchAll();
 $mascotas_sel=$db->query("SELECT m.id,CONCAT(m.nombre,' (',c.nombre,')') as label FROM mascotas m JOIN clientes c ON c.id=m.cliente_id WHERE m.estado='activo' ORDER BY m.nombre")->fetchAll();
@@ -676,20 +710,23 @@ if ($mascota_id) {
 <!-- ══ LISTADO DE PACIENTES (puerta de entrada) ══ -->
 <style>
 .hcp-search{width:100%;height:42px;border:1px solid var(--border);border-radius:12px;padding:0 14px 0 40px;font-size:14px;background:var(--bg2) url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" stroke="%2394a3b8" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>') no-repeat 14px center;}
-.hcp-list{display:flex;flex-direction:column;gap:8px;margin-top:14px}
-.hcp-row{display:flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:12px 16px;text-decoration:none;color:inherit;transition:all .15s}
-.hcp-row:hover{border-color:var(--primary);background:var(--primary-l);transform:translateX(2px)}
-.hcp-num{font-family:monospace;font-size:12px;font-weight:700;color:var(--primary-d);background:var(--primary-l);border:1px solid var(--primary);border-radius:8px;padding:5px 9px;min-width:62px;text-align:center;flex-shrink:0}
-.hcp-avatar{width:42px;height:42px;border-radius:50%;object-fit:cover;flex-shrink:0;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:20px}
-.hcp-info{flex:1;min-width:0}
-.hcp-name{font-size:14px;font-weight:700;color:var(--text)}
-.hcp-sub{font-size:12px;color:var(--text3);margin-top:1px}
-.hcp-visit{text-align:right;flex-shrink:0;font-size:12px}
-.hcp-visit .l{font-size:10px;color:var(--text3)}
+.hcp-list{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
+@media(max-width:1280px){.hcp-list{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:768px){.hcp-list{grid-template-columns:1fr}}
+.hcp-row{display:flex;align-items:center;gap:11px;background:var(--bg2);border:1.5px solid var(--border);border-radius:14px;padding:11px 13px;text-decoration:none;color:inherit;transition:all .15s;min-width:0}
+.hcp-row:hover{box-shadow:0 3px 14px rgba(0,0,0,.1);transform:translateY(-1px)}
+.hcp-num{font-family:monospace;font-size:11px;font-weight:700;color:var(--primary-d);background:var(--primary-l);border:1px solid var(--primary);border-radius:8px;padding:4px 7px;min-width:56px;text-align:center;flex-shrink:0}
+.hcp-avatar{width:42px;height:42px;border-radius:11px;object-fit:cover;flex-shrink:0;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:20px}
+.hcp-info{flex:1;min-width:0;overflow:hidden}
+.hcp-info > div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hcp-name{font-size:13px;font-weight:700;color:var(--text)}
+.hcp-sub{font-size:11px;color:var(--text3);margin-top:1px}
+.hcp-visit{text-align:right;flex-shrink:0;font-size:11px}
+.hcp-visit .l{font-size:9px;color:var(--text3)}
 .hcp-visit .v{font-weight:600;color:var(--text2)}
 .hcp-chev{color:var(--text3);flex-shrink:0;font-size:18px}
-.hcp-empty{text-align:center;padding:48px 20px;color:var(--text3)}
-@media(max-width:768px){.hcp-visit{display:none}.hcp-num{min-width:54px;font-size:11px}}
+.hcp-empty{grid-column:1/-1;text-align:center;padding:48px 20px;color:var(--text3)}
+@media(max-width:768px){.hcp-num{min-width:54px;font-size:11px}}
 </style>
 
 <form method="GET" style="margin-bottom:2px">
@@ -697,7 +734,8 @@ if ($mascota_id) {
   <input class="hcp-search" type="text" name="q" value="<?= clean($_GET['q']??'') ?>" placeholder="Buscar por mascota, dueño o especie..." autofocus>
 </form>
 
-<?php $ei_pac=['perro'=>'🐕','gato'=>'🐈','conejo'=>'🐰','ave'=>'🐦','reptil'=>'🦎','roedor'=>'🐭','otro'=>'🐾']; ?>
+<?php $ei_pac=['perro'=>'🐕','gato'=>'🐈','conejo'=>'🐰','ave'=>'🐦','reptil'=>'🦎','roedor'=>'🐭','otro'=>'🐾'];
+$espcol_pac=['perro'=>'#10b981','gato'=>'#6366f1','conejo'=>'#f59e0b','ave'=>'#3b82f6','reptil'=>'#84cc16','roedor'=>'#f97316','otro'=>'#8b5cf6']; ?>
 <div class="hcp-list">
   <?php if(empty($lista_pacientes)): ?>
     <div class="hcp-empty">
@@ -707,21 +745,19 @@ if ($mascota_id) {
   <?php else: foreach($lista_pacientes as $p):
     $foto_p = (!empty($p['foto']) && file_exists(UPLOADS_PATH.'/'.$p['foto'])) ? BASE_URL.'/public/uploads/'.$p['foto'] : null;
     $uv = $p['ultima_visita'] ? date('d/m/Y', strtotime($p['ultima_visita'])) : '—';
+    $ecp = $espcol_pac[$p['especie']] ?? '#10b981';
   ?>
-  <a class="hcp-row" href="?p=historial&mascota_id=<?= (int)$p['id'] ?>">
+  <a class="hcp-row" href="?p=historial&mascota_id=<?= (int)$p['id'] ?>" style="border-color:<?= $ecp ?>">
     <span class="hcp-num"><?= $p['hc_num'] ?></span>
     <?php if($foto_p): ?>
       <img class="hcp-avatar" src="<?= $foto_p ?>" alt="">
     <?php else: ?>
-      <span class="hcp-avatar"><?= $ei_pac[$p['especie']] ?? '🐾' ?></span>
+      <span class="hcp-avatar" style="background:<?= $ecp ?>18"><?= $ei_pac[$p['especie']] ?? '🐾' ?></span>
     <?php endif; ?>
     <div class="hcp-info">
-      <div class="hcp-name"><?= clean($p['nombre']) ?> <span style="font-size:12px;color:var(--text3);font-weight:400">· <?= ucfirst(clean($p['especie'])) ?></span></div>
-      <div class="hcp-sub"><?= clean($p['dueno']) ?> · <?= (int)$p['n_consultas'] ?> consulta<?= $p['n_consultas']!=1?'s':'' ?></div>
-    </div>
-    <div class="hcp-visit">
-      <div class="l">Última visita</div>
-      <div class="v"><?= $uv ?></div>
+      <div class="hcp-name"><?= clean($p['nombre']) ?> <span style="font-size:11px;color:var(--text3);font-weight:400">· <?= ucfirst(clean($p['especie'])) ?></span></div>
+      <div class="hcp-sub"><?= clean($p['dueno']) ?></div>
+      <div class="hcp-sub"><?= (int)$p['n_consultas'] ?> consulta<?= $p['n_consultas']!=1?'s':'' ?> · Últ: <?= $uv ?></div>
     </div>
     <span class="hcp-chev">›</span>
   </a>

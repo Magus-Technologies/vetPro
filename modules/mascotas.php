@@ -71,7 +71,7 @@ if ($action==='delete' && isset($_GET['id'])) {
 
 $clientes_sel=$db->query("SELECT id,nombre,telefono FROM clientes WHERE activo=1 ORDER BY nombre")->fetchAll();
 $especie_icons=['perro'=>'🐕','gato'=>'🐈','conejo'=>'🐰','ave'=>'🐦','reptil'=>'🦎','roedor'=>'🐭','otro'=>'🐾'];
-$especie_labels=['perro'=>'Perino','gato'=>'Gato','conejo'=>'Conejo','ave'=>'Ave','reptil'=>'Reptil','roedor'=>'Roedor','otro'=>'Otro'];
+$especie_labels=['perro'=>'Perro','gato'=>'Gato','conejo'=>'Conejo','ave'=>'Ave','reptil'=>'Reptil','roedor'=>'Roedor','otro'=>'Otro'];
 
 // ── VER perfil completo de mascota (imagen 2) ──
 if ($action==='ver' && isset($_GET['id'])) {
@@ -590,10 +590,18 @@ if (in_array($action,['nuevo','editar'])) {
       <div class="flex-1">
         <div class="form-row">
           <div class="form-group"><label class="form-label required">Dueño</label>
-            <select class="form-input" name="cliente_id" required>
-              <option value="">— Seleccionar —</option>
-              <?php foreach($clientes_sel as $c): ?><option value="<?= $c['id'] ?>" <?= ($editing['cliente_id']??$_GET['cliente_id']??'')==$c['id']?'selected':'' ?>><?= clean($c['nombre']) ?></option><?php endforeach; ?>
-            </select>
+            <?php
+              // Nombre precargado si estamos editando o viene cliente_id por URL
+              $cli_pre_id = $editing['cliente_id'] ?? $_GET['cliente_id'] ?? '';
+              $cli_pre_nom = '';
+              if ($cli_pre_id) { foreach($clientes_sel as $c){ if($c['id']==$cli_pre_id){ $cli_pre_nom=$c['nombre']; break; } } }
+            ?>
+            <div style="position:relative">
+              <input type="text" id="inp-dueno-mas" class="form-input" autocomplete="off"
+                     placeholder="🔍 Escribe para buscar dueño..." value="<?= clean($cli_pre_nom) ?>">
+              <input type="hidden" name="cliente_id" id="hid-dueno-mas" value="<?= clean($cli_pre_id) ?>" required>
+              <div id="drop-dueno-mas" style="display:none;position:absolute;top:100%;left:0;right:0;margin-top:4px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.12);z-index:50;max-height:240px;overflow-y:auto"></div>
+            </div>
           </div>
           <div class="form-group"><label class="form-label required">Nombre</label>
             <input class="form-input" name="nombre" value="<?= clean($editing['nombre']??'') ?>" required>
@@ -676,6 +684,13 @@ if (in_array($action,['nuevo','editar'])) {
 </div>
 <script>
 function previewFoto(input){const f=input.files[0];if(!f)return;const r=new FileReader();r.onload=e=>{const box=document.getElementById('foto-preview');let img=document.getElementById('foto-img');if(!img){img=document.createElement('img');img.id='foto-img';img.style.cssText='width:100%;height:100%;object-fit:cover';const em=document.getElementById('foto-emoji');if(em)em.style.display='none';box.insertBefore(img,box.firstChild);}img.src=e.target.result;};r.readAsDataURL(f);}
+// Buscador de dueño (escribir para filtrar)
+var _MAS_CLIENTES = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'nombre'=>$c['nombre'],'label'=>$c['nombre'].($c['telefono']?' · '.$c['telefono']:'')], $clientes_sel)) ?>;
+document.addEventListener('DOMContentLoaded', function(){
+  if (typeof vetSearchSelect === 'function') {
+    vetSearchSelect('inp-dueno-mas','drop-dueno-mas','hid-dueno-mas', _MAS_CLIENTES, 'nombre');
+  }
+});
 </script>
 <?php
     require_once __DIR__ . '/../includes/footer.php';

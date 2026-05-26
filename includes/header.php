@@ -73,6 +73,7 @@ $nav = [
   ['icon'=>'📊', 'label'=>'Reportes',         'page'=>'reportes',    'section'=>''],
   ['icon'=>'👤', 'label'=>'Personal',         'page'=>'personal',    'section'=>''],
   ['icon'=>'💬', 'label'=>'WhatsApp',         'page'=>'whatsapp',    'section'=>'COMUNICACIÓN'],
+  ['icon'=>'🔗', 'label'=>'Conexión WhatsApp','page'=>'whatsapp_conexion', 'section'=>''],
   ['icon'=>'🌐', 'label'=>'Portal Cliente',   'page'=>'portal',      'section'=>''],
   ['icon'=>'🔐', 'label'=>'Roles y Permisos', 'page'=>'permisos',       'section'=>''],
   ['icon'=>'🏢', 'label'=>'Multi-Sede',        'page'=>'sedes',          'section'=>''],
