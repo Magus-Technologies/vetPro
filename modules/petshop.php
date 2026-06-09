@@ -328,10 +328,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$data['nombre']) {
             $err_msg = 'El nombre del producto es obligatorio.';
         } else {
-            if ($pid) {
+            // Validar que el código de barras no esté duplicado
+            $dup_msg = null;
+            if (!empty($data['codigo_barras'])) {
+                $sq = "SELECT nombre FROM petshop_productos WHERE codigo_barras = ? AND activo=1" . ($pid ? " AND id <> ".(int)$pid : "");
+                $cb = $db->prepare($sq); $cb->execute([$data['codigo_barras']]); $dup = $cb->fetchColumn();
+                if ($dup) {
+                    $dup_msg = 'Ese código de barras ya está en uso por el producto de Pet Shop: ' . $dup;
+                } else {
+                    // Revisar también contra farmacia
+                    try {
+                        $sq2 = "SELECT nombre FROM productos WHERE codigo_barras = ? AND activo=1";
+                        $cb2 = $db->prepare($sq2); $cb2->execute([$data['codigo_barras']]); $dup2 = $cb2->fetchColumn();
+                        if ($dup2) $dup_msg = 'Ese código de barras ya está en uso por el producto de Farmacia: ' . $dup2;
+                    } catch(Exception $e){}
+                }
+            }
+            if ($dup_msg) {
+                $err_msg = $dup_msg;
+                // Mantener el form abierto con los datos
+                $action = $pid ? 'editar' : 'nuevo';
+                $editing = array_merge((array)($editing ?? []), $data, ['id'=>$pid]);
+            } elseif ($pid) {
                 $sets = implode(',', array_map(fn($f)=>"$f=:$f", $fields));
                 $db->prepare("UPDATE petshop_productos SET $sets WHERE id=:id")
                    ->execute(array_merge($data, ['id' => $pid]));
+                $msg = 'success'; $action = 'list';
             } else {
                 // Agregar sede_id al INSERT
                 $data['sede_id'] = getSede();
@@ -339,8 +361,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $cols = implode(',', $all_fields);
                 $pls  = implode(',', array_map(fn($f)=>":$f", $all_fields));
                 $db->prepare("INSERT INTO petshop_productos ($cols) VALUES ($pls)")->execute($data);
+                $msg = 'success'; $action = 'list';
             }
-            $msg = 'success'; $action = 'list';
         }
     }
 
@@ -431,9 +453,19 @@ $valor_total = $db->query("SELECT COALESCE(SUM(stock*precio_costo),0) FROM petsh
           <option value="Collares y Correas"><option value="Transporte">
         </datalist>
       </div>
-      <div class="form-group">
-        <label class="form-label">Código de barras</label>
-        <input class="form-input" name="codigo_barras" value="<?= clean($editing['codigo_barras']??'') ?>" placeholder="7890123456789">
+    </div>
+
+    <!-- 📷 CÓDIGO DE BARRAS con escaneo y autogenerar -->
+    <div class="form-group">
+      <label class="form-label">Código de barras</label>
+      <div class="flex gap-1" style="align-items:stretch">
+        <input class="form-input" id="cb-input-ps" name="codigo_barras" value="<?= clean($editing['codigo_barras']??'') ?>"
+               placeholder="Acerca el lector USB y escanea aquí, o escribe el código" autocomplete="off" style="flex:1">
+        <button type="button" class="btn" onclick="document.getElementById('cb-input-ps').focus()" title="Hacer clic, luego acercar el lector USB al producto">📷 Escanear</button>
+        <button type="button" class="btn" onclick="cbAutogenerarPS()" title="Generar código interno automático (VET-P-0001)">⚡ Autogenerar</button>
+      </div>
+      <div class="text-xs text-muted mt-1">
+        Si el producto trae código del fabricante, escanéalo. Si no, usa "Autogenerar" para crear un código interno tipo <code>VET-P-0001</code>.
       </div>
     </div>
 
@@ -501,6 +533,30 @@ $valor_total = $db->query("SELECT COALESCE(SUM(stock*precio_costo),0) FROM petsh
   </form>
 </div>
 
+<?php
+// Calcular el siguiente código interno disponible para autogenerar (VET-P-####)
+$_cb_next_ps = 1;
+try {
+    $r = $db->query("SELECT MAX(CAST(SUBSTRING(codigo_barras,7) AS UNSIGNED)) AS m FROM petshop_productos WHERE codigo_barras LIKE 'VET-P-%'")->fetch();
+    $_cb_next_ps = ((int)($r['m'] ?? 0)) + 1;
+} catch(Exception $e){}
+?>
+<script>
+function cbAutogenerarPS() {
+    var inp = document.getElementById('cb-input-ps');
+    if (inp.value.trim() !== '' && !confirm('El campo ya tiene un código (' + inp.value + '). ¿Reemplazar con uno autogenerado?')) return;
+    var n = <?= (int)$_cb_next_ps ?>;
+    inp.value = 'VET-P-' + String(n).padStart(4, '0');
+    inp.focus();
+}
+document.addEventListener('DOMContentLoaded', function(){
+    var inp = document.getElementById('cb-input-ps');
+    if (inp && !inp.value.trim() && '<?= $action ?>' === 'nuevo') {
+        setTimeout(function(){ inp.focus(); }, 100);
+    }
+});
+</script>
+
 <?php else: ?>
 <!-- ════ LISTA DE PRODUCTOS ════ -->
 
@@ -559,6 +615,7 @@ $valor_total = $db->query("SELECT COALESCE(SUM(stock*precio_costo),0) FROM petsh
       <thead>
         <tr>
           <th>Producto</th>
+          <th>Código</th>
           <th>Categoría</th>
           <th>Unidad</th>
           <th>Precio venta</th>
@@ -575,9 +632,9 @@ $valor_total = $db->query("SELECT COALESCE(SUM(stock*precio_costo),0) FROM petsh
             <div class="text-xs text-muted">
               <?= clean($p['marca']??'') ?>
               <?= $p['contenido'] ? ' · '.clean($p['contenido']) : '' ?>
-              <?= $p['codigo_barras'] ? ' · '.clean($p['codigo_barras']) : '' ?>
             </div>
           </td>
+          <td><?php if(!empty($p['codigo_barras'])): ?><code class="text-xs" style="background:#f0fdfa;color:#065f46;padding:2px 6px;border-radius:4px"><?= clean($p['codigo_barras']) ?></code><?php else: ?><span class="text-xs text-muted">—</span><?php endif; ?></td>
           <td>
             <?php if ($p['categoria']): ?>
             <span class="badge b-accent"><?= clean($p['categoria']) ?></span>

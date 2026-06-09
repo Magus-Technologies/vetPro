@@ -421,6 +421,19 @@ if ($action === 'nueva') { ?>
     </div>
   </div>
 
+  <!-- 📷 ESCANEO DE CÓDIGO DE BARRAS -->
+  <div style="padding:10px 18px;background:#f0fdfa;border-bottom:1px dashed #6ee7b7">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-size:18px">📷</span>
+      <input type="text" id="scan-input-compra" placeholder="Escanear código de barras del producto recibido (Enter para procesar)..."
+             autocomplete="off" style="flex:1;padding:7px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();procesarEscaneoCompra(this.value);this.value='';}"
+             onfocus="this.style.borderColor='var(--primary)'">
+      <button type="button" class="btn btn-sm" onclick="document.getElementById('scan-input-compra').focus()" title="Hacer clic, luego acercar el lector USB">⚡ Listo para escanear</button>
+    </div>
+    <div id="scan-feedback-compra" style="min-height:14px;font-size:11px;margin-top:4px;color:var(--text3)"></div>
+  </div>
+
   <div style="padding:12px 16px">
     <!-- Cabecera -->
     <div style="display:grid;grid-template-columns:2.5fr 1fr 1fr 1fr 1fr 1fr 80px;gap:6px;padding:0 12px;margin-bottom:4px">
@@ -484,6 +497,66 @@ function buildCatOpts(selCatId) {
 }
 
 // ── Agregar fila de producto ──
+// ═══════════════════════════════════════════════════════════════
+// ESCANEO DE CÓDIGO DE BARRAS para COMPRAS
+// Busca el código en los productos del sistema. Si lo encuentra,
+// agrega una fila ya llena (es producto existente, se sumará al stock).
+// Si NO lo encuentra, agrega una fila vacía con el código ya escrito
+// para que el usuario complete los datos (es producto nuevo).
+// ═══════════════════════════════════════════════════════════════
+function procesarEscaneoCompra(codigoRaw) {
+  var codigo = (codigoRaw||'').trim();
+  var fb = document.getElementById('scan-feedback-compra');
+  if (!codigo) { fb.textContent=''; return; }
+
+  // Buscar en la lista de productos (incluye farmacia y petshop)
+  var prod = _prods.find(function(p){ return p.codigo_barras && p.codigo_barras === codigo; });
+
+  if (prod) {
+    // ¿Ya hay fila con este producto? → sumar +1 a la cantidad
+    var existente = null;
+    document.querySelectorAll('.compra-item-row').forEach(function(row){
+      var pid = row.querySelector('input[name="item_producto_id[]"]');
+      if (pid && pid.value && parseInt(pid.value,10) === prod.id) existente = row;
+    });
+    if (existente) {
+      var cant = existente.querySelector('input[name="item_cantidad[]"]');
+      if (cant) {
+        cant.value = (parseInt(cant.value||'1',10) + 1);
+        cant.dispatchEvent(new Event('input', {bubbles:true}));
+        fb.innerHTML = '<span style="color:#10b981">✓ +1 a <b>'+prod.nombre.replace(/</g,'&lt;')+'</b> (cantidad: '+cant.value+')</span>';
+      }
+    } else {
+      addItem(prod);
+      fb.innerHTML = '<span style="color:#10b981">✓ Producto existente agregado: <b>'+prod.nombre.replace(/</g,'&lt;')+'</b> · Stock actual: '+prod.stock+'</span>';
+    }
+  } else {
+    // Producto NO existe → agregar fila vacía con el código prellenado
+    addItem({ codigo_barras: codigo });
+    fb.innerHTML = '<span style="color:#f59e0b">⚠️ Código <b>'+codigo.replace(/</g,'&lt;')+'</b> no está registrado. Se agregó una fila para que completes los datos del producto nuevo.</span>';
+  }
+
+  // Mantener el foco en el campo de escaneo
+  setTimeout(function(){ document.getElementById('scan-input-compra').focus(); }, 100);
+}
+
+// Autogenerar código interno para producto nuevo dentro de la fila
+// (calcula MAX(VET-F-####) en cliente; al guardar, el servidor garantiza unicidad)
+var _vetFMax = <?php
+    try {
+        $r = $db->query("SELECT MAX(CAST(SUBSTRING(codigo_barras,7) AS UNSIGNED)) AS m FROM productos WHERE codigo_barras LIKE 'VET-F-%'")->fetch();
+        echo (int)($r['m'] ?? 0);
+    } catch(Exception $e) { echo 0; }
+?>;
+function autogenCompraFila(btn) {
+    _vetFMax++;
+    var input = btn.previousElementSibling;
+    if (input.value.trim() !== '' && !confirm('El campo ya tiene un código (' + input.value + '). ¿Reemplazar con uno autogenerado?')) {
+      _vetFMax--; return;
+    }
+    input.value = 'VET-F-' + String(_vetFMax).padStart(4, '0');
+}
+
 function addItem(prod) {
   prod = prod || {};
   var idx = _idx++;
@@ -518,7 +591,7 @@ function addItem(prod) {
         '<div><div class="form-label">Laboratorio</div><input class="form-input" name="item_laborat[]" value="' + laborat + '" placeholder="Ej: Bayer"></div>' +
       '</div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">' +
-        '<div><div class="form-label">Cód. barras</div><input class="form-input" name="item_codbar[]" value="' + codbar + '"></div>' +
+        '<div><div class="form-label">Cód. barras</div><div style="display:flex;gap:3px"><input class="form-input" name="item_codbar[]" value="' + codbar + '" style="flex:1"><button type="button" onclick="autogenCompraFila(this)" class="btn btn-sm" style="padding:4px 8px;font-size:11px" title="Autogenerar código interno (VET-F-####)">⚡</button></div></div>' +
         '<div><div class="form-label">Categoría</div><select class="form-input" name="item_categoria[]">' + catOpts + '</select></div>' +
         '<div><div class="form-label">Stock mín.</div><input class="form-input" type="number" name="item_stk_min[]" value="' + stkMin + '" min="1"></div>' +
       '</div>' +

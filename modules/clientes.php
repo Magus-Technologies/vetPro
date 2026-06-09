@@ -179,6 +179,22 @@ $st = $db->prepare("SELECT c.*, (SELECT COUNT(*) FROM mascotas WHERE cliente_id=
 $st->execute($params); $clientes = $st->fetchAll();
 $total_pag = ceil($total/$per);
 
+// Saldos pendientes por cliente (cuentas por cobrar abiertas). Si la tabla no
+// existe todavía, queda vacío y no afecta nada.
+$saldos_cli = [];
+try {
+    if (!empty($db->query("SHOW TABLES LIKE 'cuentas'")->fetchAll()) && !empty($clientes)) {
+        $ids = array_map(fn($c)=>(int)$c['id'], $clientes);
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $sq = $db->prepare("SELECT cu.cliente_id,
+            COALESCE(SUM((SELECT COALESCE(SUM(subtotal),0) FROM cuenta_items WHERE cuenta_id=cu.id)),0) -
+            COALESCE(SUM((SELECT COALESCE(SUM(monto),0) FROM cuenta_abonos WHERE cuenta_id=cu.id)),0) AS saldo
+            FROM cuentas cu WHERE cu.estado='abierta' AND cu.cliente_id IN ($in) GROUP BY cu.cliente_id");
+        $sq->execute($ids);
+        foreach ($sq->fetchAll() as $r) { if ((float)$r['saldo'] > 0) $saldos_cli[(int)$r['cliente_id']] = (float)$r['saldo']; }
+    }
+} catch(Exception $e) {}
+
 $api_url = BASE_URL . '/api/consulta_documento.php';
 ?>
 
@@ -188,11 +204,123 @@ $api_url = BASE_URL . '/api/consulta_documento.php';
 <div class="alert alert-danger mb-2">⚠️ <?= clean(substr($msg,4)) ?></div>
 <?php endif; ?>
 
+<?php if($action==='ver' && $editing): // ───── FICHA DEL CLIENTE ─────
+  $cli = $editing;
+  // Mascotas del cliente
+  $mascotas_cli = $db->prepare("SELECT id,nombre,especie,raza,estado FROM mascotas WHERE cliente_id=? AND estado='activo' ORDER BY nombre");
+  $mascotas_cli->execute([$cli['id']]); $mascotas_cli = $mascotas_cli->fetchAll();
+  // Cuentas por cobrar del cliente
+  $cuentas_cli = []; $saldo_total = 0;
+  try {
+    if (!empty($db->query("SHOW TABLES LIKE 'cuentas'")->fetchAll())) {
+      $cc = $db->prepare("SELECT cu.*, m.nombre AS mascota,
+              (SELECT COALESCE(SUM(subtotal),0) FROM cuenta_items WHERE cuenta_id=cu.id) AS consumido,
+              (SELECT COALESCE(SUM(monto),0) FROM cuenta_abonos WHERE cuenta_id=cu.id) AS abonado
+              FROM cuentas cu LEFT JOIN mascotas m ON m.id=cu.mascota_id
+              WHERE cu.cliente_id=? ORDER BY cu.estado='abierta' DESC, cu.fecha_apertura DESC");
+      $cc->execute([$cli['id']]); $cuentas_cli = $cc->fetchAll();
+      foreach ($cuentas_cli as $q) { if ($q['estado']==='abierta') $saldo_total += ((float)$q['consumido'] - (float)$q['abonado']); }
+    }
+  } catch(Exception $e) {}
+  $esp_emoji = ['perro'=>'🐕','gato'=>'🐈','conejo'=>'🐇','ave'=>'🦜','reptil'=>'🦎','roedor'=>'🐹','otro'=>'🐾'];
+?>
+<div class="sec-header">
+  <div><a href="?p=clientes" class="btn btn-sm">← Volver a clientes</a></div>
+  <div class="flex gap-1">
+    <a href="?p=clientes&action=editar&id=<?= $cli['id'] ?>" class="btn btn-sm">✏️ Editar</a>
+    <a href="?p=mascotas&cliente_id=<?= $cli['id'] ?>" class="btn btn-sm">🐾 Mascotas</a>
+  </div>
+</div>
+
+<div class="grid g2" style="align-items:start">
+  <!-- Datos del cliente -->
+  <div>
+    <div class="card mb-2">
+      <div class="flex items-center gap-2 mb-2">
+        <div style="width:54px;height:54px;border-radius:50%;background:var(--teal-l,#e1f5ee);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:var(--teal,#0d9488)">
+          <?= strtoupper(mb_substr($cli['nombre'],0,1)) ?>
+        </div>
+        <div>
+          <div style="font-size:18px;font-weight:800"><?= clean($cli['nombre']) ?></div>
+          <div class="text-sm text-muted">
+            <?php if($cli['dni']): ?>DNI <?= clean($cli['dni']) ?><?php endif; ?>
+            <?php if($cli['ruc']): ?>RUC <?= clean($cli['ruc']) ?><?php endif; ?>
+          </div>
+        </div>
+      </div>
+      <div class="mas-field" style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)">
+        <span class="text-muted text-sm">Teléfono</span>
+        <a href="https://wa.me/<?= preg_replace('/\D/','',ltrim($cli['telefono'],'+')) ?>" target="_blank" style="color:var(--wa-d,#0d9488);text-decoration:none;font-weight:600">💬 <?= clean($cli['telefono']) ?></a>
+      </div>
+      <?php if(!empty($cli['email'])): ?>
+      <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)"><span class="text-muted text-sm">Email</span><span class="text-sm"><?= clean($cli['email']) ?></span></div>
+      <?php endif; ?>
+      <div style="display:flex;justify-content:space-between;padding:7px 0"><span class="text-muted text-sm">Dirección</span><span class="text-sm" style="text-align:right;max-width:60%"><?= clean($cli['direccion'] ?: '—') ?></span></div>
+    </div>
+
+    <!-- Mascotas -->
+    <div class="card">
+      <div class="sec-header"><div class="sec-title">Mascotas (<?= count($mascotas_cli) ?>)</div></div>
+      <?php if(empty($mascotas_cli)): ?><div class="text-muted text-sm" style="padding:10px">Sin mascotas registradas.</div><?php endif; ?>
+      <?php foreach($mascotas_cli as $ms): ?>
+      <a href="?p=mascotas&action=ver&id=<?= $ms['id'] ?>" class="flex items-center gap-2" style="padding:9px 0;border-bottom:1px solid var(--border);text-decoration:none;color:inherit">
+        <span style="font-size:22px"><?= $esp_emoji[$ms['especie']] ?? '🐾' ?></span>
+        <div class="flex-1"><div class="text-sm font-med"><?= clean($ms['nombre']) ?></div><div class="text-xs text-muted"><?= ucfirst($ms['especie']) ?><?= $ms['raza']?' · '.clean($ms['raza']):'' ?></div></div>
+        <span class="text-muted">›</span>
+      </a>
+      <?php endforeach; ?>
+    </div>
+  </div>
+
+  <!-- Cuenta por cobrar -->
+  <div>
+    <div class="card">
+      <div class="sec-header">
+        <div class="sec-title">💳 Cuenta por cobrar</div>
+        <?php if($saldo_total>0): ?><span class="badge" style="background:#fef2f2;color:#b91c1c">Debe S/ <?= number_format($saldo_total,2) ?></span><?php endif; ?>
+      </div>
+
+      <?php if(empty($cuentas_cli)): ?>
+        <div class="text-center text-muted" style="padding:18px">
+          Este cliente no tiene cuentas registradas.
+          <div class="mt-2"><a href="?p=cuentas" class="btn btn-sm btn-primary">+ Abrir cuenta en Cuentas por cobrar</a></div>
+        </div>
+      <?php else: ?>
+        <?php foreach($cuentas_cli as $q): $sal = (float)$q['consumido'] - (float)$q['abonado']; $ab = ($q['estado']==='abierta'); ?>
+        <a href="?p=cuentas&id=<?= $q['id'] ?>" style="display:block;text-decoration:none;color:inherit;padding:11px 12px;border:1px solid var(--border);border-left:3px solid <?= $ab?'var(--red,#ef4444)':'var(--green,#10b981)' ?>;border-radius:8px;margin-bottom:8px">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-sm font-med"><?= $q['mascota'] ? clean($q['mascota']) : 'General' ?> <?= $q['nota']?'· '.clean($q['nota']):'' ?></div>
+              <div class="text-xs text-muted">Desde <?= date('d/m/Y', strtotime($q['fecha_apertura'])) ?> · <?= $ab?'Abierta':'Cerrada' ?></div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:15px;font-weight:800;color:<?= $ab && $sal>0 ?'var(--red,#ef4444)':'var(--green,#10b981)' ?>">S/ <?= number_format($ab?$sal:0,2) ?></div>
+              <div class="text-xs text-muted">consumido S/ <?= number_format($q['consumido'],2) ?></div>
+            </div>
+          </div>
+        </a>
+        <?php endforeach; ?>
+        <div class="mt-2 text-center"><a href="?p=cuentas" class="btn btn-sm">Ver todas las cuentas por cobrar →</a></div>
+      <?php endif; ?>
+    </div>
+  </div>
+</div>
+<?php endif; ?>
+
 <?php if(in_array($action,['nuevo','editar'])): ?>
+<style>
+/* Fix scroll formulario clientes:
+   En "Nuevo cliente" se renderiza el panel de búsqueda DNI/RUC, lo que hace el
+   formulario más alto que el área visible en tablet/escritorio. El contenedor
+   de scroll (.content) no tenía espacio inferior, así que los botones
+   Guardar/Cancelar quedaban fuera de la zona desplazable. Garantizamos scroll
+   y un colchón inferior para que el fondo del formulario sea siempre alcanzable. */
+.content{ overflow-y:auto !important; padding-bottom:110px !important; }
+</style>
 <div class="card" style="max-width:700px">
   <div class="sec-header">
     <div>
-      <div class="sec-title"><?= $action==='editar'?'Editar':'Nuevo'?> Cliente</div>
+      <div class="sec-title"><?= $action==='editar'?'Editar':'Nuevo'?> Cliente <span style="font-size:10px;color:var(--text3);font-weight:400">v2</span></div>
       <?php if($action==='nuevo'): ?><div class="sec-sub">Ingresa el DNI o RUC para autocompletar los datos</div><?php endif; ?>
     </div>
     <a href="?p=clientes" class="btn btn-sm">← Volver</a>
@@ -200,58 +328,45 @@ $api_url = BASE_URL . '/api/consulta_documento.php';
 
   <!-- BUSCADOR DNI / RUC -->
   <?php if($action==='nuevo'): ?>
-  <?php
-    @include_once __DIR__ . '/../includes/config_tokens.php';
-    $token_ok = defined('TOKEN_APIS_NET_PE') && TOKEN_APIS_NET_PE !== '';
-  ?>
-  <?php if(!$token_ok): ?>
-  <div class="alert alert-warn mb-2" style="flex-direction:column;gap:6px">
-    <div class="flex items-center gap-2"><span>⚠️</span><strong>Token de API no configurado — búsqueda DNI/RUC puede fallar</strong></div>
-    <div style="font-size:12px;line-height:1.9">
-      1. Ve a <a href="https://apis.net.pe" target="_blank" style="color:var(--amber-d);font-weight:700">apis.net.pe</a> → Regístrate gratis (30 segundos)<br>
-      2. Copia tu token del panel<br>
-      3. Abre <code style="background:#fff3cd;padding:1px 5px;border-radius:4px;font-size:11px">vetpro/includes/config_tokens.php</code> y pega el token en <code>TOKEN_APIS_NET_PE</code>
-    </div>
-  </div>
-  <?php endif; ?>
-  <div style="background:var(--teal-l);border:1.5px solid var(--teal);border-radius:12px;padding:16px 18px;margin-bottom:20px">
-    <div class="flex items-center gap-2 mb-3">
+  <div style="background:var(--teal-l);border:1.5px solid var(--teal);border-radius:12px;padding:14px 16px;margin-bottom:18px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
       <span style="font-size:20px">🔍</span>
-      <div><div style="font-size:13px;font-weight:700;color:var(--teal-d)">Búsqueda automática RENIEC / SUNAT</div>
-      <div style="font-size:11px;color:var(--teal-d);opacity:.7">Ingresa el DNI (8 dígitos) o RUC (11 dígitos) y los datos se autocompletan</div></div>
-    </div>
-    <div class="flex gap-2" style="flex-wrap:wrap">
-      <!-- DNI -->
-      <div style="flex:1;min-width:200px">
-        <label class="form-label">DNI del titular</label>
-        <div class="flex gap-1">
-          <div style="position:relative;flex:1">
-            <input id="inp-dni-buscar" class="form-input" type="text" maxlength="8" placeholder="12345678"
-              style="padding-right:36px" oninput="this.value=this.value.replace(/\D/,'')" onkeydown="if(event.key==='Enter'){event.preventDefault();buscarDoc('dni')}">
-            <span id="ico-dni" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:15px;pointer-events:none"></span>
-          </div>
-          <button type="button" class="btn btn-primary" onclick="buscarDoc('dni')" id="btn-dni">
-            <span id="btn-dni-txt">Buscar</span>
-          </button>
-        </div>
-      </div>
-      <!-- Separador -->
-      <div style="display:flex;align-items:flex-end;padding-bottom:2px;color:var(--text3);font-size:12px;font-weight:600">— o —</div>
-      <!-- RUC -->
-      <div style="flex:1;min-width:200px">
-        <label class="form-label">RUC (persona jurídica)</label>
-        <div class="flex gap-1">
-          <div style="position:relative;flex:1">
-            <input id="inp-ruc-buscar" class="form-input" type="text" maxlength="11" placeholder="20123456789"
-              style="padding-right:36px" oninput="this.value=this.value.replace(/\D/,'')" onkeydown="if(event.key==='Enter'){event.preventDefault();buscarDoc('ruc')}">
-            <span id="ico-ruc" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:15px;pointer-events:none"></span>
-          </div>
-          <button type="button" class="btn btn-primary" onclick="buscarDoc('ruc')" id="btn-ruc">
-            <span id="btn-ruc-txt">Buscar</span>
-          </button>
-        </div>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:var(--teal-d)">Búsqueda automática RENIEC / SUNAT</div>
+        <div style="font-size:11px;color:var(--teal-d);opacity:.7">Ingresa el DNI (8 dígitos) o RUC (11 dígitos) y los datos se autocompletan</div>
       </div>
     </div>
+
+    <!-- DNI -->
+    <div style="margin-bottom:10px">
+      <label class="form-label" style="margin-bottom:4px;display:block">DNI del titular</label>
+      <div style="display:flex;gap:6px">
+        <div style="position:relative;flex:1">
+          <input id="inp-dni-buscar" class="form-input" type="text" maxlength="8" placeholder="12345678"
+            style="padding-right:36px;width:100%;box-sizing:border-box" oninput="this.value=this.value.replace(/\D/,'')" onkeydown="if(event.key==='Enter'){event.preventDefault();buscarDoc('dni')}">
+          <span id="ico-dni" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:15px;pointer-events:none"></span>
+        </div>
+        <button type="button" class="btn btn-primary" onclick="buscarDoc('dni')" id="btn-dni" style="flex-shrink:0">
+          <span id="btn-dni-txt">Buscar</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- RUC -->
+    <div>
+      <label class="form-label" style="margin-bottom:4px;display:block">RUC (persona jurídica)</label>
+      <div style="display:flex;gap:6px">
+        <div style="position:relative;flex:1">
+          <input id="inp-ruc-buscar" class="form-input" type="text" maxlength="11" placeholder="20123456789"
+            style="padding-right:36px;width:100%;box-sizing:border-box" oninput="this.value=this.value.replace(/\D/,'')" onkeydown="if(event.key==='Enter'){event.preventDefault();buscarDoc('ruc')}">
+          <span id="ico-ruc" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:15px;pointer-events:none"></span>
+        </div>
+        <button type="button" class="btn btn-primary" onclick="buscarDoc('ruc')" id="btn-ruc" style="flex-shrink:0">
+          <span id="btn-ruc-txt">Buscar</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Resultado badge -->
     <div id="resultado-busqueda" style="display:none;margin-top:12px"></div>
   </div>
@@ -323,6 +438,7 @@ $api_url = BASE_URL . '/api/consulta_documento.php';
     </div>
   </form>
 </div>
+<div aria-hidden="true" style="height:24px"></div>
 
 <script>
 const API_URL = '<?= $api_url ?>';
@@ -438,7 +554,7 @@ function showResultado(tipo, html) {
 });
 </script>
 
-<?php else: ?>
+<?php elseif($action!=='ver'): ?>
 <!-- ──────────── LISTA ──────────── -->
 
 <?php
@@ -701,9 +817,14 @@ if (!empty($msg) && strpos($msg,'import_ok:') === 0) {
             </a>
           </td>
           <td class="text-muted text-xs" style="max-width:180px"><?= clean($c['direccion']??'—') ?></td>
-          <td><span class="badge b-teal"><?= $c['n_mascotas'] ?> mascota<?= $c['n_mascotas']!=1?'s':'' ?></span></td>
+          <td><span class="badge b-teal"><?= $c['n_mascotas'] ?> mascota<?= $c['n_mascotas']!=1?'s':'' ?></span>
+            <?php if(!empty($saldos_cli[$c['id']])): ?>
+              <a href="?p=clientes&action=ver&id=<?= $c['id'] ?>" class="badge" style="background:#fef2f2;color:#b91c1c;text-decoration:none;margin-left:4px" title="Tiene saldo pendiente">💰 Debe S/ <?= number_format($saldos_cli[$c['id']],2) ?></a>
+            <?php endif; ?>
+          </td>
           <td>
             <div class="flex gap-1">
+              <a href="?p=clientes&action=ver&id=<?= $c['id'] ?>" class="btn btn-xs">👁️ Ver</a>
               <a href="?p=clientes&action=editar&id=<?= $c['id'] ?>" class="btn btn-xs">✏️ Editar</a>
               <a href="?p=mascotas&cliente_id=<?= $c['id'] ?>" class="btn btn-xs">🐾 Mascotas</a>
               <a href="<?= BASE_URL ?>/index.php?p=whatsapp&cliente_id=<?= $c['id'] ?>" class="btn btn-xs btn-wa" title="WhatsApp">💬</a>

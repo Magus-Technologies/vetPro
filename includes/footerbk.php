@@ -236,64 +236,6 @@ function toggleVetMenu(){
   if(c) c.textContent=open?'∨':'∧';
 }
 
-/* ── SUBMENÚ VETERINARIA EN MÓVIL (autocontenido) ──
-   Reconstruye los enlaces (Mascotas / Ganado), los deja abiertos por defecto y
-   monta un toggle propio que SÍ funciona en el drawer. No depende de
-   toggleVetMenu ni de ningún script del header: clona el item para eliminar
-   cualquier listener previo y enlaza el suyo. En escritorio no actúa. */
-(function(){
-  var done = false;
-  function setupVetMobile(){
-    if (window.innerWidth > 768) return;
-    var sm    = document.getElementById('vet-submenu');
-    var caret = document.getElementById('vet-caret');
-    var item  = caret ? caret.closest('.nav-item') : null;
-    if (!sm || !item || done) return;
-    done = true;
-
-    // 1) Reconstruir los enlaces con estilos visibles explícitos
-    var liStyle = 'display:flex!important;visibility:visible!important;opacity:1!important;'
-                + 'align-items:center;gap:10px;padding:9px 12px;margin:2px 6px;border-radius:8px;'
-                + 'color:rgba(255,255,255,.75);text-decoration:none;font-size:13px';
-    sm.innerHTML =
-      '<a href="<?= BASE_URL ?>/index.php?p=mascotas" class="nav-item" style="'+liStyle+'">'
-        + '<span class="ni" style="font-size:16px">🐾</span><span>Mascotas</span></a>'
-      + '<a href="<?= BASE_URL ?>/index.php?p=ganado" class="nav-item" style="'+liStyle+'">'
-        + '<span class="ni" style="font-size:16px">🐄</span><span>Ganado Vacuno</span></a>';
-
-    // 2) Abierto por defecto — forzado con !important (es el único modo que
-    //    mostró los enlaces; hay alguna regla heredada que gana al inline normal)
-    sm.style.setProperty('display','block','important');
-    sm.style.setProperty('visibility','visible','important');
-    sm.style.setProperty('height','auto','important');
-    sm.style.setProperty('overflow','visible','important');
-    caret.textContent = '∧';
-
-    // 3) Toggle propio (clonar el item elimina listeners previos del header).
-    //    Abrir/cerrar también con !important para que la regla heredada no gane.
-    var fresh = item.cloneNode(true);
-    item.parentNode.replaceChild(fresh, item);
-    fresh.removeAttribute('onclick');
-    fresh.style.cursor = 'pointer';
-    fresh.addEventListener('click', function(e){
-      e.preventDefault();
-      e.stopPropagation();
-      var c = document.getElementById('vet-caret');
-      var oculto = getComputedStyle(sm).display === 'none';
-      if (oculto) {
-        sm.style.setProperty('display','block','important');
-        sm.style.setProperty('overflow','visible','important');
-      } else {
-        sm.style.setProperty('display','none','important');
-      }
-      if (c) c.textContent = oculto ? '∧' : '∨';
-    });
-  }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupVetMobile);
-  else setupVetMobile();
-  window.addEventListener('resize', setupVetMobile);
-})();
-
 /* ── Helper global ── */
 function copyToClipboard(text,btn){
   navigator.clipboard.writeText(text).then(function(){

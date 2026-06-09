@@ -460,3 +460,115 @@ input, select, textarea { font-size:16px !important; }
   .btn { min-height:38px !important; }
   .btn-sm { min-height:32px !important; }
 }
+
+/* ════════════════════════════════════════════════════════════════
+   FIX DESBORDE HORIZONTAL EN MÓVIL — GLOBAL (todos los módulos)
+   ----------------------------------------------------------------
+   Los módulos arman layouts con estilo INLINE variado y sin
+   breakpoints (ej. "1fr 300px", "2fr 1fr", repeat(4,1fr), filas
+   flex con width:fit-content) y por eso se cortan a la derecha.
+   Estas reglas capturan esos patrones de forma genérica.
+   ════════════════════════════════════════════════════════════════ */
+
+/* 0) Nada dentro del contenido puede superar el ancho de pantalla */
+.content, .content .card, .content .page { max-width:100% !important; }
+.content img, .content video, .content canvas { max-width:100% !important; height:auto; }
+
+/* 1) Grillas inline de 3+ columnas iguales → 2 columnas */
+.content [style*="repeat(3"],
+.content [style*="repeat(4"],
+.content [style*="repeat(5"],
+.content [style*="repeat(6"],
+.content [style*="repeat(7"],
+.content [style*="repeat(8"],
+.content [style*="1fr 1fr 1fr"] {
+  grid-template-columns:repeat(2,1fr) !important;
+  gap:10px !important;
+}
+
+/* 2) Layouts inline de 2 columnas con una columna ancha o por ratios
+      (contenido + panel/preview/sidebar) → apilar en 1 columna */
+.content [style*="1fr 220px"], .content [style*="1fr 240px"],
+.content [style*="1fr 260px"], .content [style*="1fr 280px"],
+.content [style*="1fr 300px"], .content [style*="1fr 320px"],
+.content [style*="1fr 340px"], .content [style*="1fr 360px"],
+.content [style*="1fr 380px"], .content [style*="1fr 400px"],
+.content [style*="200px 1fr"], .content [style*="220px 1fr"],
+.content [style*="240px 1fr"], .content [style*="260px 1fr"],
+.content [style*="280px 1fr"], .content [style*="300px 1fr"],
+.content [style*="320px 1fr"], .content [style*="340px 1fr"],
+.content [style*="360px 1fr"],
+.content [style*="2fr 1fr"], .content [style*="1fr 2fr"],
+.content [style*="3fr 1fr"], .content [style*="1fr 3fr"],
+.content [style*="3fr 2fr"], .content [style*="2fr 3fr"] {
+  grid-template-columns:1fr !important;
+  height:auto !important;
+  overflow:visible !important;
+}
+
+/* 3) Filas tipo "segmento/pestañas" inline (flex + width:fit-content)
+      → no cortar: permitir scroll horizontal dentro de la fila */
+.content [style*="display:flex"][style*="width:fit-content"] {
+  max-width:100% !important;
+  overflow-x:auto !important;
+  -webkit-overflow-scrolling:touch !important;
+}
+
+/* 4) Clases de grilla definidas en el <style> propio de cada módulo
+      que no traen breakpoint móvil */
+.content .quick-grid { grid-template-columns:1fr 1fr !important; }
+.content .pac-grid   { grid-template-columns:repeat(3,1fr) !important; }
+
+/* 5) Pestañas/píldoras/chips por clase → que envuelvan */
+.content .tabs-pills,
+.content .tabs-nav,
+.content .smart-alerts { flex-wrap:wrap !important; }
+
+/* 6) Selects, inputs y textareas nunca más anchos que la pantalla */
+.content select,
+.content .form-input,
+.content textarea {
+  max-width:100% !important;
+  width:100% !important;
+  box-sizing:border-box !important;
+}
+.content .input-group { max-width:100% !important; }
+
+/* ── TOPBAR MÓVIL: evitar que la barra superior se corte ──
+   Los chips de alerta ("1 cita hoy", "6 vacunas"…) ya se ocultan en móvil
+   con .mob-hide (su info está en la campana 🔔). Aquí soltamos el recorte de
+   la barra de acciones y compactamos el selector de sede para que quepan la
+   campana y "Nueva Atención" sin cortarse. */
+.topbar-actions { max-width:none !important; overflow:visible !important; flex-shrink:0 !important; }
+.topbar select  { max-width:130px !important; font-size:12px !important; font-weight:700 !important; padding:4px 7px !important; }
+
+/* El submenú "Veterinaria" en móvil se gestiona por JS en footer.php
+   (reconstruye los enlaces) y se pliega/despliega con el toggle. No se fuerza
+   abierto aquí para que la flecha pueda ocultarlo. */
+
+/* ── DASHBOARD: apilar la fila principal en móvil ──
+   La fila "contenido + columna lateral" es un flex en fila sin clase. En móvil
+   no se apilaba: la columna izquierda (flex:1; min-width:0) quedaba aplastada a
+   ~0 de ancho (una línea vertical) dejando un gran hueco al lado. La forzamos a
+   columna y a ancho completo. */
+.content [style*="display:flex"][style*="align-items:flex-start"][style*="gap:16px"]{
+  flex-direction:column !important;
+  align-items:stretch !important;
+}
+
+/* ── DASHBOARD: fila de "Agenda de hoy" ordenada en móvil ──
+   .agenda-item es una grilla 52px 1fr auto (hora · paciente · acciones). En
+   móvil las acciones aplastaban al paciente y el nombre se partía palabra por
+   palabra. La pasamos a 2 columnas (hora · paciente al ancho completo) y
+   mandamos las acciones (3.ª celda) a una segunda fila debajo. */
+.agenda-item{
+  grid-template-columns:52px 1fr !important;
+  align-items:start !important;
+  row-gap:8px !important;
+}
+.agenda-item > div:nth-child(3){
+  grid-column:1 / -1 !important;
+  justify-content:flex-start !important;
+  flex-wrap:wrap !important;
+  gap:8px !important;
+}

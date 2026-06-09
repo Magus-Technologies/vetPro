@@ -350,9 +350,9 @@ if (!$_fac_all) {
 $clientes_sel  = $db->query("SELECT id,nombre,telefono,COALESCE(dni,'') as dni,COALESCE(ruc,'') as ruc,COALESCE(ce,'') as ce,COALESCE(pasaporte,'') as pasaporte FROM clientes WHERE activo=1$_fac_sw ORDER BY nombre")->fetchAll();
 $mascotas_sel  = $db->query("SELECT m.id,CONCAT(m.nombre,' (',c.nombre,')') as label,m.cliente_id FROM mascotas m JOIN clientes c ON c.id=m.cliente_id WHERE m.estado='activo'$_fac_swm ORDER BY m.nombre")->fetchAll();
 $servicios_sel = $db->query("SELECT id,nombre,precio FROM servicios WHERE activo=1 ORDER BY tipo,nombre")->fetchAll();
-$productos_sel = $db->query("SELECT id,nombre,precio_venta as precio,COALESCE(codigo_barras,'') AS codigo FROM productos WHERE activo=1 AND stock>0".($_fac_sw_prod??" ")." ORDER BY nombre")->fetchAll();
+$productos_sel = $db->query("SELECT id,nombre,precio_venta as precio FROM productos WHERE activo=1 AND stock>0".($_fac_sw_prod??" ")." ORDER BY nombre")->fetchAll();
 try {
-    $petshop_sel = $db->query("SELECT p.id, CONCAT(p.nombre, IFNULL(CONCAT(' (',p.contenido,')'), '')) as nombre, p.precio_venta as precio, COALESCE(p.codigo_barras,'') AS codigo FROM petshop_productos p WHERE p.activo=1 AND p.stock>0$_fac_swp ORDER BY p.nombre")->fetchAll();
+    $petshop_sel = $db->query("SELECT p.id, CONCAT(p.nombre, IFNULL(CONCAT(' (',p.contenido,')'), '')) as nombre, p.precio_venta as precio FROM petshop_productos p WHERE p.activo=1 AND p.stock>0$_fac_swp ORDER BY p.nombre")->fetchAll();
 } catch(Exception $e) { $petshop_sel = []; }
 
 // ─── LISTA DE VENTAS ────────────────────────────────────────────
@@ -510,19 +510,6 @@ if (isset($_SESSION['flash_error'])) {
               <button type="button" class="btn btn-sm" onclick="addItemManual()">+ Manual</button>
             </div>
           </div>
-
-          <!-- 📷 ESCANEO DE CÓDIGO DE BARRAS -->
-          <div style="background:#f0fdfa;border:1px dashed #6ee7b7;border-radius:8px;padding:8px 12px;margin-bottom:10px">
-            <div class="flex items-center gap-2">
-              <span style="font-size:18px">📷</span>
-              <input type="text" id="scan-input" class="form-input" placeholder="Escanear código de barras del producto (o escribir y Enter)..."
-                     autocomplete="off" style="flex:1;font-size:13px"
-                     onkeydown="if(event.key==='Enter'){event.preventDefault();procesarEscaneo(this.value);this.value='';}">
-              <button type="button" class="btn btn-sm" onclick="document.getElementById('scan-input').focus()" title="Enfocar el campo para escanear">⚡ Listo para escanear</button>
-            </div>
-            <div id="scan-feedback" class="text-xs mt-1" style="min-height:14px;color:var(--text3)"></div>
-          </div>
-
           <table style="width:100%;border-collapse:collapse;font-size:13px" id="items-table">
             <thead id="items-thead" style="display:none">
               <tr style="background:var(--bg3)">
@@ -1015,8 +1002,8 @@ if (isset($_SESSION['flash_error'])) {
 
 <script>
 var SERVICIOS = <?= json_encode(array_values(array_map(fn($s)=>['id'=>(int)$s['id'],'nombre'=>$s['nombre'],'precio'=>(float)$s['precio']], $servicios_sel))) ?>;
-var PRODUCTOS = <?= json_encode(array_values(array_map(fn($p)=>['id'=>(int)$p['id'],'nombre'=>$p['nombre'],'precio'=>(float)$p['precio'],'codigo'=>$p['codigo']??''], $productos_sel))) ?>;
-var PETSHOP   = <?= json_encode(array_values(array_map(fn($p)=>['id'=>(int)$p['id'],'nombre'=>$p['nombre'],'precio'=>(float)$p['precio'],'codigo'=>$p['codigo']??''], $petshop_sel))) ?>;
+var PRODUCTOS = <?= json_encode(array_values(array_map(fn($p)=>['id'=>(int)$p['id'],'nombre'=>$p['nombre'],'precio'=>(float)$p['precio']], $productos_sel))) ?>;
+var PETSHOP   = <?= json_encode(array_values(array_map(fn($p)=>['id'=>(int)$p['id'],'nombre'=>$p['nombre'],'precio'=>(float)$p['precio']], $petshop_sel))) ?>;
 var CLIENTES  = <?= json_encode(array_values($_cli_js ?? [])) ?>;
 var MASCOTAS  = <?= json_encode(array_values($_mas_js ?? [])) ?>;
 var SERIES    = <?= json_encode($_series_sede_actual) ?>;
@@ -1479,65 +1466,6 @@ function addItem(tipo) {
   document.getElementById('items-list').appendChild(row);
   showHeader();
   row.querySelector('select').focus();
-}
-
-// ═══════════════════════════════════════════════════════════════
-// ESCANEO DE CÓDIGO DE BARRAS
-// Busca el código en PRODUCTOS y PETSHOP. Si lo encuentra, agrega
-// una línea ya rellena con descripción y precio. Si la línea ya
-// existe (mismo código escaneado de nuevo), suma 1 a la cantidad.
-// Si no lo encuentra, muestra aviso al usuario.
-// ═══════════════════════════════════════════════════════════════
-function procesarEscaneo(codigoRaw) {
-  var codigo = (codigoRaw||'').trim();
-  var fb = document.getElementById('scan-feedback');
-  if (!codigo) { fb.textContent=''; return; }
-
-  // Buscar en farmacia y petshop
-  var prod = PRODUCTOS.find(function(p){ return p.codigo && p.codigo === codigo; });
-  var tipo = 'producto';
-  if (!prod) {
-    prod = PETSHOP.find(function(p){ return p.codigo && p.codigo === codigo; });
-    tipo = 'petshop';
-  }
-
-  if (!prod) {
-    fb.innerHTML = '<span style="color:#ef4444">❌ Producto con código <b>'+codigo.replace(/</g,'&lt;')+'</b> no encontrado. Verifica que esté registrado y con stock.</span>';
-    return;
-  }
-
-  // ¿Ya hay una fila con este producto? → sumar +1 a la cantidad
-  var rows = document.querySelectorAll('#items-list tr.item-row');
-  var encontrada = null;
-  rows.forEach(function(row){
-    var ref = row.querySelector('input[name="item_ref[]"]');
-    var tipoH = row.querySelector('input[name="item_tipo[]"]');
-    if (ref && tipoH && (+ref.value) === prod.id && tipoH.value === tipo) encontrada = row;
-  });
-  if (encontrada) {
-    var qty = encontrada.querySelector('input[name="item_qty[]"]');
-    qty.value = (parseInt(qty.value||'1',10) + 1);
-    qty.dispatchEvent(new Event('input', {bubbles:true}));
-    fb.innerHTML = '<span style="color:#10b981">✓ +1 a <b>'+prod.nombre.replace(/</g,'&lt;')+'</b> (cantidad: '+qty.value+')</span>';
-  } else {
-    // Agregar nueva línea ya rellenada
-    addItem(tipo);
-    // Tomar la última fila recién agregada
-    var ultima = document.querySelector('#items-list tr.item-row:last-child');
-    if (ultima) {
-      var sel = ultima.querySelector('select');
-      // Seleccionar la opción del producto
-      for (var i=0; i<sel.options.length; i++) {
-        if (parseInt(sel.options[i].value,10) === prod.id) { sel.selectedIndex = i; break; }
-      }
-      // Disparar el rellenado de descripción y precio
-      sel.dispatchEvent(new Event('change', {bubbles:true}));
-    }
-    fb.innerHTML = '<span style="color:#10b981">✓ Agregado: <b>'+prod.nombre.replace(/</g,'&lt;')+'</b> — S/. '+prod.precio.toFixed(2)+'</span>';
-  }
-
-  // Mantener el foco en el campo de escaneo (para escanear el siguiente)
-  setTimeout(function(){ document.getElementById('scan-input').focus(); }, 100);
 }
 
 function addItemManual() {

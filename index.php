@@ -12,7 +12,7 @@ $allowed = [
   'facturacion','plantillas','caja','personal','reportes',
   'whatsapp','portal','buscar',
   'ganado','permisos','calendario','sedes','compras','configuracion',
-  'whatsapp_conexion'
+  'whatsapp_conexion','reporte_pagos','cuentas','movimientos'
 ];
 if (!in_array($p, $allowed)) $p = 'dashboard';
 
