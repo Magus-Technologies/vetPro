@@ -14,12 +14,20 @@ try {
 } catch(Exception $e) { $citas_hoy = 0; }
 
 try {
-  $vac_venc = (int)$db->query("SELECT COUNT(*) FROM vacunas WHERE proxima_dosis < CURDATE()")->fetchColumn();
+  try {
+    $vac_venc = (int)$db->query("SELECT COUNT(*) FROM vacunas WHERE estado='aplicada' AND proxima_dosis < CURDATE()")->fetchColumn();
+  } catch(Exception $e) {
+    $vac_venc = (int)$db->query("SELECT COUNT(*) FROM vacunas WHERE proxima_dosis < CURDATE()")->fetchColumn();
+  }
   if ($vac_venc > 0) $alertas_data[] = ['tipo'=>'danger','msg'=>"$vac_venc vacuna".($vac_venc>1?'s':'')." vencida".($vac_venc>1?'s':''),'link'=>'vacunas','icon'=>'⚠️'];
 } catch(Exception $e) { $vac_venc = 0; }
 
 try {
-  $vac_prox = (int)$db->query("SELECT COUNT(*) FROM vacunas WHERE proxima_dosis BETWEEN CURDATE() AND DATE_ADD(CURDATE(),INTERVAL 7 DAY)")->fetchColumn();
+  try {
+    $vac_prox = (int)$db->query("SELECT COUNT(*) FROM vacunas WHERE estado='aplicada' AND proxima_dosis BETWEEN CURDATE() AND DATE_ADD(CURDATE(),INTERVAL 7 DAY)")->fetchColumn();
+  } catch(Exception $e) {
+    $vac_prox = (int)$db->query("SELECT COUNT(*) FROM vacunas WHERE proxima_dosis BETWEEN CURDATE() AND DATE_ADD(CURDATE(),INTERVAL 7 DAY)")->fetchColumn();
+  }
   if ($vac_prox > 0) $alertas_data[] = ['tipo'=>'warn','msg'=>"$vac_prox vacuna".($vac_prox>1?'s':'')." por vencer",'link'=>'vacunas','icon'=>'💉'];
 } catch(Exception $e) { $vac_prox = 0; }
 
@@ -52,6 +60,7 @@ try {
 $nav = [
   ['icon'=>'⊞', 'label'=>'Dashboard',       'page'=>'dashboard',   'section'=>'PRINCIPAL'],
   ['icon'=>'🗓️', 'label'=>'Citas / Agenda',   'page'=>'calendario',  'section'=>''],
+  ['icon'=>'📩', 'label'=>'Solicitudes', 'page'=>'solicitudes', 'section'=>''],
   ['icon'=>'👥', 'label'=>'Clientes',         'page'=>'clientes',    'section'=>''],
   ['icon'=>'🏥', 'label'=>'Veterinaria',      'page'=>'_vet_toggle', 'section'=>''],
   ['icon'=>'🐾', 'label'=>'Mascotas',         'page'=>'mascotas',    'section'=>'', 'sub'=>true],
@@ -65,6 +74,7 @@ $nav = [
   ['icon'=>'🚑', 'label'=>'Hospital/UCI',     'page'=>'hospital',    'section'=>''],
   ['icon'=>'✨', 'label'=>'Grooming',         'page'=>'grooming',    'section'=>'SERVICIOS'],
   ['icon'=>'🛒', 'label'=>'Pet Shop',         'page'=>'petshop',     'section'=>''],
+  ['icon'=>'🏷️', 'label'=>'Servicios',         'page'=>'servicios',   'section'=>''],
   ['icon'=>'💊', 'label'=>'Farmacia',         'page'=>'farmacia',    'section'=>'INVENTARIO'],
   ['icon'=>'📦', 'label'=>'Inventario',       'page'=>'inventario',  'section'=>''],
   ['icon'=>'🛒', 'label'=>'Compras',           'page'=>'compras',     'section'=>''],
@@ -90,7 +100,7 @@ $nav = [
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>VetPro — <?= clean($pageTitle) ?></title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <?php
 /* Cache-busting de CSS: agrega ?v=<fecha de modificación del archivo> para que
    el navegador descargue la versión nueva cada vez que editas el CSS, en lugar
@@ -198,8 +208,19 @@ $__vMob  = ($__cssDir && @filemtime("$__cssDir/mobile.css")) ? filemtime("$__css
 <div class="mob-overlay" id="mobOverlay" onclick="closeMobMenu()"></div>
 
 <nav class="sidebar" id="mainSidebar">
+
+ <?php
+    $__cfg_logo = '';
+    try { $__cfg_logo = trim((string) getDB()->query("SELECT valor FROM configuracion WHERE clave='logo_path' LIMIT 1")->fetchColumn()); } catch (Exception $e) {}
+  ?>
   <div class="sidebar-logo">
-    <div class="logo-icon">🐾</div>
+    <div class="logo-icon" style="overflow:hidden">
+      <?php if ($__cfg_logo !== ''): ?>
+        <img src="<?= UPLOADS_URL.'/'.htmlspecialchars($__cfg_logo) ?>" alt="VetPro"
+             style="width:100%;height:100%;object-fit:contain;background:#fff;border-radius:inherit;padding:2px"
+             onerror="this.style.display='none';this.parentNode.textContent='🐾'">
+      <?php else: ?>🐾<?php endif; ?>
+    </div>
     <div>
       <div class="logo-text">VetPro</div>
       <div class="logo-sub">Sistema Veterinario</div>
