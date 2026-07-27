@@ -6,6 +6,62 @@ $db = getDB();
 $action = $_GET['action'] ?? 'list';
 $msg = '';
 
+// ─────────────────────────────────────────────────────────────
+// Especies gestionables (agregar / eliminar) — igual que tipos de vacuna
+//   Se guardan en la tabla `especies`. El valor almacenado en
+//   mascotas.especie es el `nombre` en minúsculas (slug), y el ícono
+//   es un emoji configurable.
+// ─────────────────────────────────────────────────────────────
+try {
+    $db->exec("CREATE TABLE IF NOT EXISTS especies (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        nombre VARCHAR(50) NOT NULL,
+        icono VARCHAR(10) DEFAULT '🐾',
+        estado ENUM('activo','suspendido') NOT NULL DEFAULT 'activo',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    // Sembrar con las especies por defecto la primera vez
+    $cnt = (int)$db->query("SELECT COUNT(*) FROM especies")->fetchColumn();
+    if ($cnt === 0) {
+        $semilla = [['perro','🐕'],['gato','🐈'],['conejo','🐰'],['ave','🐦'],['reptil','🦎'],['roedor','🐭'],['otro','🐾']];
+        $ins = $db->prepare("INSERT INTO especies (nombre,icono) VALUES (?,?)");
+        foreach ($semilla as $s) $ins->execute([$s[0],$s[1]]);
+    }
+    // La columna mascotas.especie debe ser VARCHAR para aceptar especies nuevas
+    // (originalmente era ENUM con una lista fija). Se convierte una sola vez.
+    $col = $db->query("SHOW COLUMNS FROM mascotas LIKE 'especie'")->fetch();
+    if ($col && stripos($col['Type'] ?? '', 'enum') !== false) {
+        $db->exec("ALTER TABLE mascotas MODIFY COLUMN especie VARCHAR(50) NOT NULL DEFAULT 'otro'");
+    }
+    // Ampliar el peso para admitir 3 decimales (ej. 4.560) y pesos grandes
+    $colp = $db->query("SHOW COLUMNS FROM mascotas LIKE 'peso'")->fetch();
+    if ($colp && stripos($colp['Type'] ?? '', '(7,3)') === false) {
+        $db->exec("ALTER TABLE mascotas MODIFY COLUMN peso DECIMAL(7,3) DEFAULT NULL");
+    }
+} catch (Exception $e) {}
+
+// Acciones del gestor de especies
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action']??''), ['esp_add','esp_edit'], true)) {
+    $esp_nombre = strtolower(trim($_POST['nombre'] ?? ''));
+    $esp_icono  = trim($_POST['icono'] ?? '') ?: '🐾';
+    if ($esp_nombre !== '') {
+        if ($_POST['action'] === 'esp_add') {
+            $dup = $db->prepare("SELECT id FROM especies WHERE nombre=? AND estado='activo'");
+            $dup->execute([$esp_nombre]);
+            if (!$dup->fetch()) $db->prepare("INSERT INTO especies (nombre,icono,estado) VALUES (?,?,'activo')")->execute([$esp_nombre,$esp_icono]);
+        } else {
+            $db->prepare("UPDATE especies SET nombre=?, icono=? WHERE id=?")->execute([$esp_nombre,$esp_icono,(int)($_POST['id']??0)]);
+        }
+    }
+    $action = 'especies';
+}
+if ($action === 'esp_suspender' && isset($_GET['id'])) {
+    $db->prepare("UPDATE especies SET estado='suspendido' WHERE id=?")->execute([(int)$_GET['id']]); $action='especies';
+}
+if ($action === 'esp_reactivar' && isset($_GET['id'])) {
+    $db->prepare("UPDATE especies SET estado='activo' WHERE id=?")->execute([(int)$_GET['id']]); $action='especies';
+}
+
 // ── POST: guardar ──
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $pa = $_POST['action'];
@@ -15,6 +71,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                    'color','chip_numero','alergias','condiciones','estado',
                    'grupo_sanguineo','personalidad','esterilizado','microchip','alimentacion','observaciones'];
         $data=[]; foreach($fields as $f) $data[$f]=trim($_POST[$f]??'')?:null;
+        // Normalizar peso: aceptar coma decimal y decimales (ej: "4,56" o "4.560")
+        if (!empty($data['peso'])) { $data['peso']=str_replace(',','.',$data['peso']); if(!is_numeric($data['peso'])) $data['peso']=null; }
+        // Guardar especie siempre en minúsculas (coincide con la lista de especies)
+        if (!empty($data['especie'])) $data['especie']=strtolower($data['especie']);
         // Asignar sede activa al crear mascota nueva
         $data['sede_id'] = getSede();
         $foto_nueva=null;
@@ -91,8 +151,18 @@ if ($action==='delete' && isset($_GET['id'])) {
 }
 
 $clientes_sel=$db->query("SELECT id,nombre,telefono FROM clientes WHERE activo=1 ORDER BY nombre")->fetchAll();
+// Especies desde la base de datos (gestionables). Se mantiene un respaldo por si la tabla falla.
 $especie_icons=['perro'=>'🐕','gato'=>'🐈','conejo'=>'🐰','ave'=>'🐦','reptil'=>'🦎','roedor'=>'🐭','otro'=>'🐾'];
-$especie_labels=['perro'=>'Perro','gato'=>'Gato','conejo'=>'Conejo','ave'=>'Ave','reptil'=>'Reptil','roedor'=>'Roedor','otro'=>'Otro'];
+$especie_labels=[];
+try {
+    $_esp_todas = $db->query("SELECT nombre,icono,estado FROM especies ORDER BY estado,nombre")->fetchAll();
+    foreach ($_esp_todas as $_e) {
+        $especie_icons[$_e['nombre']] = $_e['icono'] ?: '🐾';
+        if ($_e['estado']==='activo') $especie_labels[$_e['nombre']] = ucfirst($_e['nombre']);
+    }
+} catch (Exception $e) {}
+// Respaldo si no hay especies activas cargadas
+if (empty($especie_labels)) $especie_labels=['perro'=>'Perro','gato'=>'Gato','conejo'=>'Conejo','ave'=>'Ave','reptil'=>'Reptil','roedor'=>'Roedor','otro'=>'Otro'];
 
 // ── VER perfil completo de mascota (imagen 2) ──
 if ($action==='ver' && isset($_GET['id'])) {
@@ -608,6 +678,78 @@ async function uploadFoto(input, id) {
 }
 
 // ═══════════════════════════════════════
+// GESTOR DE ESPECIES (agregar / eliminar)
+// ═══════════════════════════════════════
+if ($action==='especies') {
+    $_esp_all = [];
+    try { $_esp_all = $db->query("SELECT id,nombre,icono,estado FROM especies ORDER BY estado,nombre")->fetchAll(); } catch(Exception $e){}
+    $_esp_act = array_filter($_esp_all, fn($t)=>$t['estado']==='activo');
+    $_esp_sus = array_filter($_esp_all, fn($t)=>$t['estado']==='suspendido');
+    ?>
+<div class="card" style="max-width:620px">
+  <div class="sec-header">
+    <div class="sec-title">⚙️ Gestionar especies</div>
+    <a href="?p=mascotas&action=nuevo" class="btn btn-sm">← Volver</a>
+  </div>
+
+  <!-- Agregar nueva especie -->
+  <form method="POST" style="display:flex;gap:8px;margin:14px 0 18px;align-items:flex-end">
+    <input type="hidden" name="action" value="esp_add">
+    <div class="form-group" style="width:70px;margin:0"><label class="form-label">Ícono</label>
+      <input class="form-input" name="icono" placeholder="🐾" maxlength="4" style="text-align:center">
+    </div>
+    <div class="form-group" style="flex:1;margin:0"><label class="form-label">Nueva especie</label>
+      <input class="form-input" name="nombre" placeholder="Ej: Hurón" required>
+    </div>
+    <button type="submit" class="btn btn-primary">＋ Agregar</button>
+  </form>
+
+  <!-- Especies activas -->
+  <div style="font-size:12px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Especies activas (<?= count($_esp_act) ?>)</div>
+  <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:20px">
+    <?php if(empty($_esp_act)): ?>
+      <div style="font-size:12px;color:var(--text3);padding:8px 0">No hay especies activas. Agrega una arriba.</div>
+    <?php else: foreach($_esp_act as $t): ?>
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg3);border-radius:8px">
+      <form method="POST" style="display:flex;flex:1;gap:6px;align-items:center;margin:0">
+        <input type="hidden" name="action" value="esp_edit">
+        <input type="hidden" name="id" value="<?= $t['id'] ?>">
+        <input class="form-input" name="icono" value="<?= clean($t['icono']) ?>" maxlength="4" style="width:52px;height:34px;text-align:center;font-size:15px">
+        <input class="form-input" name="nombre" value="<?= clean(ucfirst($t['nombre'])) ?>" style="flex:1;height:34px;font-size:13px">
+        <button type="submit" class="btn btn-sm" title="Guardar cambios">💾</button>
+      </form>
+      <a href="?p=mascotas&action=esp_suspender&id=<?= $t['id'] ?>"
+         onclick="return confirm('¿Eliminar esta especie de la lista? Quedará suspendida (no se borra) y dejará de aparecer al registrar mascotas. Las mascotas ya registradas conservan su especie.')"
+         class="btn btn-sm" style="color:var(--danger)" title="Eliminar (suspender)">🗑️</a>
+    </div>
+    <?php endforeach; endif; ?>
+  </div>
+
+  <!-- Especies suspendidas -->
+  <?php if(!empty($_esp_sus)): ?>
+  <div style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Suspendidas (<?= count($_esp_sus) ?>)</div>
+  <div style="display:flex;flex-direction:column;gap:6px">
+    <?php foreach($_esp_sus as $t): ?>
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px dashed var(--border);border-radius:8px;opacity:.75">
+      <span style="font-size:15px"><?= clean($t['icono']) ?></span>
+      <span style="flex:1;font-size:13px;color:var(--text3);text-decoration:line-through"><?= clean(ucfirst($t['nombre'])) ?></span>
+      <a href="?p=mascotas&action=esp_reactivar&id=<?= $t['id'] ?>" class="btn btn-sm" style="color:var(--primary)" title="Reactivar">↩️ Reactivar</a>
+    </div>
+    <?php endforeach; ?>
+  </div>
+  <?php endif; ?>
+
+  <div style="font-size:11px;color:var(--text3);margin-top:16px;line-height:1.5">
+    💡 Al eliminar una especie se marca como <strong>suspendida</strong> (no se borra de la base de datos).
+    Las mascotas ya registradas con esa especie conservan su información.
+  </div>
+</div>
+<?php
+    require_once __DIR__ . '/../includes/footer.php';
+    return;
+}
+
+// ═══════════════════════════════════════
 // FORM: nuevo / editar
 // ═══════════════════════════════════════
 if (in_array($action,['nuevo','editar'])) {
@@ -664,9 +806,19 @@ if (in_array($action,['nuevo','editar'])) {
           </div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label class="form-label required">Especie</label>
-            <select class="form-input" name="especie" required onchange="document.getElementById('foto-emoji').textContent={'perro':'🐕','gato':'🐈','conejo':'🐰','ave':'🐦','reptil':'🦎','roedor':'🐭','otro':'🐾'}[this.value]||'🐾'">
-              <?php foreach($especie_labels as $k=>$v): ?><option value="<?= $k ?>" <?= ($editing['especie']??'perro')===$k?'selected':'' ?>><?= $v ?></option><?php endforeach; ?>
+          <div class="form-group"><label class="form-label required" style="display:flex;align-items:center;justify-content:space-between">
+              <span>Especie</span>
+              <a href="?p=mascotas&action=especies" style="font-size:11px;font-weight:600;color:var(--primary);text-decoration:none">⚙️ Gestionar</a>
+            </label>
+            <?php
+              $_esp_icons_js = json_encode($especie_icons, JSON_UNESCAPED_UNICODE);
+              $_esp_actual = strtolower($editing['especie'] ?? 'perro');
+              // Si la especie actual está suspendida y no aparece en la lista activa, agregarla igual para no perderla
+              $_esp_opts = $especie_labels;
+              if ($_esp_actual && !isset($_esp_opts[$_esp_actual])) $_esp_opts[$_esp_actual] = ucfirst($_esp_actual);
+            ?>
+            <select class="form-input" name="especie" required onchange="document.getElementById('foto-emoji').textContent=(<?= $_esp_icons_js ?>)[this.value]||'🐾'">
+              <?php foreach($_esp_opts as $k=>$v): ?><option value="<?= $k ?>" <?= $_esp_actual===$k?'selected':'' ?>><?= $v ?></option><?php endforeach; ?>
             </select>
           </div>
           <div class="form-group"><label class="form-label">Raza</label>
@@ -686,7 +838,7 @@ if (in_array($action,['nuevo','editar'])) {
     </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Peso (kg)</label>
-        <input class="form-input" type="number" step="0.1" name="peso" value="<?= clean($editing['peso']??'') ?>">
+        <input class="form-input" type="number" step="0.001" min="0" name="peso" value="<?= clean($editing['peso']??'') ?>" placeholder="Ej: 4.560">
       </div>
       <div class="form-group"><label class="form-label">Color / Pelaje</label>
         <input class="form-input" name="color" value="<?= clean($editing['color']??'') ?>">

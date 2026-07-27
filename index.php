@@ -5,7 +5,7 @@ requireLogin();
 $p = preg_replace('/[^a-z_]/', '', strtolower($_GET['p'] ?? 'dashboard'));
 $allowed = [
   'dashboard','citas','clientes','mascotas',
-  'historial','recetas','evolucion','examenes','vacunas',
+  'historial','recetas','evolucion','examenes','vacunas','triaje',
   'cirugias','hospital',
   'grooming','petshop','servicios','solicitudes',
   'farmacia','inventario',
@@ -17,9 +17,18 @@ $allowed = [
 if (!in_array($p, $allowed)) $p = 'dashboard';
 
 // Verificar permiso de acceso al módulo
-$modulos_sin_permiso = ['portal','buscar','evolucion','whatsapp_conexion']; // módulos sin restricción específica
-if (!in_array($p, $modulos_sin_permiso) && $p !== 'dashboard') {
+$modulos_sin_permiso = ['portal','buscar','evolucion','whatsapp_conexion','triaje']; // módulos sin restricción específica
+if (!in_array($p, $modulos_sin_permiso)) {
     if (!canView($p)) {
+        // Si no puede ver el dashboard tampoco, mandarlo al primer módulo permitido (evita bucle)
+        if ($p === 'dashboard') {
+            $destino = '';
+            foreach ($allowed as $cand) {
+                if (in_array($cand, $modulos_sin_permiso)) continue;
+                if ($cand !== 'dashboard' && canView($cand)) { $destino = $cand; break; }
+            }
+            if ($destino !== '') { header('Location: '.BASE_URL.'/index.php?p='.$destino); exit; }
+        }
         // Mostrar página de acceso denegado
         $pageTitle = 'Acceso denegado';
         require_once __DIR__ . '/includes/header.php';

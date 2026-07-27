@@ -76,7 +76,7 @@ if ($action === 'set_estado' && isset($_GET['id'])) {
     if (in_array($nv, ['aplicada','completada','anulada'], true)) {
         $db->prepare("UPDATE vacunas SET estado=? WHERE id=?")->execute([$nv, (int)$_GET['id']]);
     }
-    $keep = array_intersect_key($_GET, array_flip(['q','estado','mascota_id']));
+    $keep = array_intersect_key($_GET, array_flip(['q','estado','mascota_id','cliente_id']));
     header('Location: ?p=vacunas' . ($keep ? '&'.http_build_query($keep) : '')); exit;
 }
 
@@ -95,8 +95,10 @@ $mascotas_sel = $db->query("SELECT m.id,CONCAT(m.nombre,' (',c.nombre,')') as la
 $vets_sel = $db->query("SELECT id,nombre FROM usuarios WHERE rol IN ('veterinario','admin') AND activo=1")->fetchAll();
 
 $mascota_id = (int)($_GET['mascota_id']??0);
+$cliente_id = (int)($_GET['cliente_id']??0);
 $where = "1=1"; $params=[];
 if ($mascota_id) { $where .= " AND v.mascota_id=?"; $params[]=$mascota_id; }
+if ($cliente_id) { $where .= " AND cl.id=?"; $params[]=$cliente_id; }
 $search = trim($_GET['q']??'');
 if ($search) { $where .= " AND (m.nombre LIKE ? OR cl.nombre LIKE ? OR v.tipo_vacuna LIKE ?)"; $like="%$search%"; $params=array_merge($params,[$like,$like,$like]); }
 $estado_f = $_GET['estado']??'';
@@ -112,8 +114,13 @@ try {
     }
 } catch(Exception $e) {}
 
-$st = $db->prepare("SELECT v.*,m.nombre as mascota,m.especie,u.nombre as veterinario,cl.nombre as dueno,cl.telefono FROM vacunas v JOIN mascotas m ON m.id=v.mascota_id JOIN usuarios u ON u.id=v.veterinario_id JOIN clientes cl ON cl.id=m.cliente_id WHERE $where ORDER BY v.proxima_dosis ASC");
+$st = $db->prepare("SELECT v.*,m.nombre as mascota,m.especie,u.nombre as veterinario,cl.id as cliente_id,cl.nombre as dueno,cl.telefono FROM vacunas v JOIN mascotas m ON m.id=v.mascota_id JOIN usuarios u ON u.id=v.veterinario_id JOIN clientes cl ON cl.id=m.cliente_id WHERE $where ORDER BY v.fecha_aplicacion DESC, v.id DESC");
 $st->execute($params); $vacunas = $st->fetchAll();
+
+// Nombre del filtro activo (dueño o mascota) para el chip
+$filtro_nombre = '';
+if ($cliente_id) { $fn=$db->prepare("SELECT nombre FROM clientes WHERE id=?"); $fn->execute([$cliente_id]); $filtro_nombre=$fn->fetchColumn(); }
+elseif ($mascota_id) { $fn=$db->prepare("SELECT nombre FROM mascotas WHERE id=?"); $fn->execute([$mascota_id]); $filtro_nombre=$fn->fetchColumn(); }
 
 // Contadores
 $st_stats = $db->query("SELECT
@@ -245,6 +252,8 @@ require_once __DIR__ . '/../includes/header.php';
   <div class="sec-title">Registro de vacunas</div>
   <div class="flex gap-1">
     <form method="GET" class="flex gap-1"><input type="hidden" name="p" value="vacunas">
+      <?php if($cliente_id): ?><input type="hidden" name="cliente_id" value="<?= $cliente_id ?>"><?php endif; ?>
+      <?php if($mascota_id): ?><input type="hidden" name="mascota_id" value="<?= $mascota_id ?>"><?php endif; ?>
       <input class="form-input" name="q" value="<?= clean($search) ?>" placeholder="Buscar..." style="width:200px">
       <select class="form-input" name="estado" style="width:150px">
         <option value="">Todos</option>
@@ -260,15 +269,55 @@ require_once __DIR__ . '/../includes/header.php';
   </div>
 </div>
 
+<?php if($filtro_nombre): ?>
+<div class="mb-2" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+  <span style="display:inline-flex;align-items:center;gap:8px;background:var(--primary-l,#e0f2fe);color:var(--primary,#0369a1);font-size:13px;font-weight:600;padding:6px 12px;border-radius:999px">
+    <?= $cliente_id?'👤 Dueño:':'🐾 Mascota:' ?> <?= clean($filtro_nombre) ?>
+    <a href="?p=vacunas" style="color:inherit;text-decoration:none;font-weight:800" title="Quitar filtro">✕</a>
+  </span>
+  <span style="font-size:12px;color:var(--text3)"><?= count($vacunas) ?> vacuna(s)</span>
+</div>
+<?php endif; ?>
+
 <div class="card" style="padding:0">
   <div class="table-wrap">
     <table class="vtable">
-      <thead><tr><th>Mascota</th><th>Dueño</th><th>Vacuna</th><th>Laboratorio / Lote</th><th>Aplicada</th><th>Próxima dosis</th><th>Estado</th><th>Acciones</th></tr></thead>
+      <thead><tr><th>Mascota</th><th>Vacuna</th><th>Laboratorio / Lote</th><th>Aplicada</th><th>Próxima dosis</th><th>Estado</th><th>Acciones</th></tr></thead>
       <tbody>
         <?php
-          $qs_keep = array_intersect_key($_GET, array_flip(['q','estado','mascota_id']));
+          $qs_keep = array_intersect_key($_GET, array_flip(['q','estado','mascota_id','cliente_id']));
           $qs = $qs_keep ? '&'.http_build_query($qs_keep) : '';
-          foreach($vacunas as $v):
+
+          // ── Agrupar por DUEÑO para no repetir el nombre en cada fila ──
+          // $vacunas ya viene ordenado por fecha de aplicación (reciente→antigua),
+          // así que dentro de cada grupo se conserva ese orden y los grupos
+          // quedan encabezados por su vacuna más reciente.
+          $grupos = [];
+          foreach($vacunas as $v){
+            $k = (int)$v['cliente_id'];
+            if(!isset($grupos[$k])) $grupos[$k]=['dueno'=>$v['dueno'],'cliente_id'=>$k,'items'=>[]];
+            $grupos[$k]['items'][]=$v;
+          }
+          // Por defecto los grupos aparecen colapsados; se despliegan al hacer
+          // clic en el nombre del dueño. Si ya se filtró un solo dueño o solo
+          // hay un grupo, se muestra desplegado de una vez.
+          $auto_abrir = ($cliente_id>0 || count($grupos)<=1);
+          foreach($grupos as $g):
+            $prev_mas = null;
+            $gid = (int)$g['cliente_id'];
+        ?>
+        <!-- Encabezado de dueño (clic para desglosar) -->
+        <tr class="vac-grp-head" data-grp="<?= $gid ?>" onclick="vacToggleGrupo(<?= $gid ?>)" style="background:var(--bg3);cursor:pointer">
+          <td colspan="7" style="padding:9px 14px;border-top:2px solid var(--border)">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <span class="vac-caret" id="vac-caret-<?= $gid ?>" style="font-size:11px;color:var(--text3);transition:transform .15s;display:inline-block;<?= $auto_abrir?'transform:rotate(90deg)':'' ?>">▶</span>
+              <span style="font-size:13px;font-weight:800;color:var(--text)">👤 <?= clean($g['dueno']) ?></span>
+              <span style="font-size:11px;color:var(--text3)"><?= count($g['items']) ?> vacuna(s)</span>
+              <?php if(!$cliente_id): ?><a href="?p=vacunas&cliente_id=<?= $g['cliente_id'] ?>" onclick="event.stopPropagation()" style="font-size:11px;color:var(--primary);text-decoration:none;font-weight:600;margin-left:auto">Ver solo este dueño →</a><?php endif; ?>
+            </div>
+          </td>
+        </tr>
+        <?php foreach($g['items'] as $v):
           $tiene_prox = !empty($v['proxima_dosis']);
           $proxima_ts = $tiene_prox ? strtotime($v['proxima_dosis']) : null;
           $dias = $tiene_prox ? ($proxima_ts - time()) / 86400 : null;
@@ -286,10 +335,16 @@ require_once __DIR__ . '/../includes/header.php';
           $tel = preg_replace('/[^0-9]/','',ltrim($v['telefono'],'+'));
           if(strlen($tel)<11) $tel='51'.$tel;
           $wa_msg = $tiene_prox ? "💉 *Alerta de Vacuna — VetPro*\n\nHola {$v['dueno']} 👋\n\nLa vacuna de *{$v['mascota']}* ".($dias<0?'ha vencido':'vence pronto').":\n🗓️ *Vencimiento:* ".date('d/m/Y',$proxima_ts)."\n💉 {$v['tipo_vacuna']}\n\n👉 Agenda su cita respondiendo este mensaje.\n\nVetPro 🐾" : '';
+          // Mostrar la mascota solo cuando cambia dentro del grupo del dueño
+          $mostrar_mas = ($prev_mas !== (int)$v['mascota_id']);
+          $prev_mas = (int)$v['mascota_id'];
         ?>
-        <tr<?= $v['estado']==='anulada'?' style="opacity:.6"':'' ?>>
-          <td><div class="flex items-center gap-1"><span style="font-size:18px"><?= $especie_icons[$v['especie']]??'🐾' ?></span><span class="td-main"><?= clean($v['mascota']) ?></span></div></td>
-          <td><?= clean($v['dueno']) ?></td>
+        <tr class="vac-grp-row vac-grp-<?= $gid ?>" style="<?= $auto_abrir?'':'display:none;' ?><?= $v['estado']==='anulada'?'opacity:.6':'' ?>">
+          <td style="padding-left:22px">
+            <?php if($mostrar_mas): ?>
+            <a href="?p=vacunas&mascota_id=<?= (int)$v['mascota_id'] ?>" style="text-decoration:none;color:inherit" title="Ver solo las vacunas de esta mascota"><div class="flex items-center gap-1"><span style="font-size:18px"><?= $especie_icons[$v['especie']]??'🐾' ?></span><span class="td-main" style="border-bottom:1px dashed var(--border)"><?= clean($v['mascota']) ?></span></div></a>
+            <?php else: ?><span style="color:var(--text3)">↳</span><?php endif; ?>
+          </td>
           <td class="font-med"><?= clean($v['tipo_vacuna']) ?></td>
           <td class="text-muted text-xs"><?= clean($v['laboratorio']??'—') ?><br><?= clean($v['lote']??'—') ?></td>
           <td class="text-muted"><?= date('d/m/Y',strtotime($v['fecha_aplicacion'])) ?></td>
@@ -308,7 +363,8 @@ require_once __DIR__ . '/../includes/header.php';
           </div></td>
         </tr>
         <?php endforeach; ?>
-        <?php if(empty($vacunas)): ?><tr><td colspan="8" class="text-center text-muted" style="padding:32px">No se encontraron vacunas.</td></tr><?php endif; ?>
+        <?php endforeach; ?>
+        <?php if(empty($vacunas)): ?><tr><td colspan="7" class="text-center text-muted" style="padding:32px">No se encontraron vacunas.</td></tr><?php endif; ?>
       </tbody>
     </table>
   </div>
@@ -325,5 +381,17 @@ document.addEventListener('DOMContentLoaded',function(){
     vetSearchSelect('inp-mas-vac','drop-mas-vac','hid-mas-vac',_M,'label');
     vetSearchSelect('inp-vet-vac','drop-vet-vac','hid-vet-vac',_V,'label');
 });
+// Desglosar / colapsar las vacunas de un dueño al hacer clic en su nombre
+function vacToggleGrupo(gid){
+    var filas=document.querySelectorAll('.vac-grp-'+gid);
+    var caret=document.getElementById('vac-caret-'+gid);
+    var abierto=false;
+    filas.forEach(function(f){
+        var oculto=(f.style.display==='none'||getComputedStyle(f).display==='none');
+        f.style.display= oculto ? '' : 'none';
+        if(oculto) abierto=true;
+    });
+    if(caret) caret.style.transform = abierto ? 'rotate(90deg)' : '';
+}
 </script>
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>

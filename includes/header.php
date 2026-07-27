@@ -65,7 +65,8 @@ $nav = [
   ['icon'=>'🏥', 'label'=>'Veterinaria',      'page'=>'_vet_toggle', 'section'=>''],
   ['icon'=>'🐾', 'label'=>'Mascotas',         'page'=>'mascotas',    'section'=>'', 'sub'=>true],
   ['icon'=>'🐄', 'label'=>'Ganado Vacuno',    'page'=>'ganado',      'section'=>'', 'sub'=>true],
-  ['icon'=>'📋', 'label'=>'Historia Clínica', 'page'=>'historial',   'section'=>'CLÍNICA'],
+  ['icon'=>'🚦', 'label'=>'Triaje',           'page'=>'triaje',      'section'=>'CLÍNICA'],
+  ['icon'=>'📋', 'label'=>'Historia Clínica', 'page'=>'historial',   'section'=>''],
   ['icon'=>'📋', 'label'=>'Recetas',          'page'=>'recetas',     'section'=>''],
   ['icon'=>'📈', 'label'=>'Evolución',        'page'=>'evolucion',   'section'=>''],
   ['icon'=>'🔬', 'label'=>'Exámenes',         'page'=>'examenes',    'section'=>''],
@@ -233,6 +234,12 @@ $__vMob  = ($__cssDir && @filemtime("$__cssDir/mobile.css")) ? filemtime("$__css
   $in_vet_sub = false;
 
   foreach ($nav as $item) {
+    // Ocultar del menú los módulos que el rol no puede ver (admin ve todo).
+    $pg = $item['page'] ?? '';
+    $_sin_check = ['_vet_toggle','portal','buscar','evolucion','whatsapp_conexion','triaje'];
+    if ($pg !== '' && !in_array($pg, $_sin_check, true) && function_exists('canView') && !canView($pg)) {
+        continue;
+    }
     // Sección
     if (!empty($item['section']) && $item['section'] !== $lastSec) {
       if ($in_vet_sub) { echo '</div>'; $in_vet_sub = false; }
