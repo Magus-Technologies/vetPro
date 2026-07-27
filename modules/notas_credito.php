@@ -86,11 +86,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['flash_error'] = 'Ese comprobante pertenece a otra sede.';
             header('Location: ' . BASE_URL . '/index.php?p=notas_credito&action=nueva'); exit;
         }
-        if ($venta['estado'] === 'anulado') {
-            $_SESSION['flash_error'] = 'Este comprobante ya está anulado — tiene una nota de crédito aceptada.';
-            header('Location: ' . BASE_URL . '/index.php?p=notas_credito&action=nueva'); exit;
-        }
-
+        // Un comprobante anulado localmente NO se excluye: la baja ante SUNAT
+        // solo existe con nota de crédito, así que sigue necesitando emitirla.
+        // El duplicado real lo bloquea la comprobación de abajo.
         $stNC = $db->prepare("
             SELECT id FROM notas_credito
             WHERE venta_id=? AND tipo_nota='credito' AND sunat_estado='aceptado' LIMIT 1
@@ -391,14 +389,15 @@ if ($action === 'lista') {
 
 // ─── NUEVA NOTA ───────────────────────────────────────────────────
 } elseif ($action === 'nueva') {
+    // Venta preseleccionada al llegar desde el detalle de facturación.
+    $venta_sel = (int)($_GET['venta_id'] ?? 0);
     $ventas = $db->query("
-        SELECT v.id, v.serie, v.numero, v.tipo_comprobante, v.total, v.fecha, v.sunat_estado, v.sede_id,
+        SELECT v.id, v.serie, v.numero, v.tipo_comprobante, v.total, v.fecha, v.sunat_estado, v.sede_id, v.estado,
                c.nombre AS cliente
         FROM ventas v
         JOIN clientes c ON v.cliente_id = c.id
         WHERE v.tipo_comprobante IN('boleta','factura')
           AND v.sunat_xml IS NOT NULL
-          AND v.estado != 'anulado'
           AND " . sedeWhere('v') . "
           AND NOT EXISTS (
               SELECT 1 FROM notas_credito nc
@@ -407,6 +406,12 @@ if ($action === 'lista') {
         ORDER BY v.fecha DESC
         LIMIT 500
     ")->fetchAll();
+
+    // Llegó apuntando a un comprobante que ya no admite nota: hay que explicarlo.
+    if ($venta_sel && !array_filter($ventas, fn($v) => (int)$v['id'] === $venta_sel)) {
+        echo '<div class="alert alert-warn mb-2">⚠️ Ese comprobante ya tiene una nota de crédito aceptada por SUNAT, o pertenece a otra sede. Elige otro de la lista.</div>';
+        $venta_sel = 0;
+    }
 
     // Series previsualizables por sede de cada comprobante.
     $seriesPorSede = [];
@@ -435,8 +440,9 @@ if ($action === 'lista') {
           <select name="venta_id" class="form-input" required id="selVenta">
             <option value="">— Selecciona un comprobante —</option>
             <?php foreach ($ventas as $v): ?>
-              <option value="<?= $v['id'] ?>" data-sede="<?= (int)($v['sede_id'] ?? 1) ?>">
+              <option value="<?= $v['id'] ?>" data-sede="<?= (int)($v['sede_id'] ?? 1) ?>" <?= $v['id'] == $venta_sel ? 'selected' : '' ?>>
                 [<?= strtoupper($v['sunat_estado'] ?? '') ?>]
+                <?= $v['estado'] === 'anulado' ? '⚠ ANULADO SIN NOTA · ' : '' ?>
                 <?= strtoupper($v['tipo_comprobante']) ?> ·
                 <?= clean($v['serie']) ?>-<?= str_pad((string)$v['numero'],8,'0',STR_PAD_LEFT) ?> ·
                 <?= clean($v['cliente']) ?> ·

@@ -229,8 +229,19 @@ class SunatService
         $st->execute([$env['cdr'] ?? '', $env['mensaje'] ?? 'ACEPTADO', $notaId]);
 
         if ($nota['tipo_nota'] === 'credito') {
-            $this->db->prepare("UPDATE ventas SET estado='anulado' WHERE id=?")
-                     ->execute([(int) $nota['venta_id']]);
+            $ventaId = (int) $nota['venta_id'];
+            $this->db->prepare("UPDATE ventas SET estado='anulado' WHERE id=?")->execute([$ventaId]);
+
+            // La venta deja de ser ingreso: se compensa en la caja abierta.
+            if (function_exists('registrarEgresoAnulacion')) {
+                $usuarioId = (int) ($_SESSION['user']['id'] ?? 0);
+                if ($usuarioId > 0) {
+                    registrarEgresoAnulacion(
+                        $this->db, $ventaId, $usuarioId,
+                        'Nota de crédito ' . $nota['serie'] . '-' . str_pad((string)$nota['numero'], 8, '0', STR_PAD_LEFT) . ' —'
+                    );
+                }
+            }
         }
 
         return [

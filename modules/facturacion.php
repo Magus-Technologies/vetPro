@@ -223,7 +223,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($pa === 'anular') {
-        $db->prepare("UPDATE ventas SET estado='anulado' WHERE id=?")->execute([(int)$_POST['id']]);
+        $anular_id = (int)$_POST['id'];
+
+        // Un comprobante ya emitido a SUNAT no se da de baja con un UPDATE:
+        // requiere nota de crédito. Se redirige en vez de anular a ciegas.
+        $st = $db->prepare("SELECT sunat_xml FROM ventas WHERE id=?");
+        $st->execute([$anular_id]);
+        if (!empty($st->fetchColumn())) {
+            header('Location: '.BASE_URL.'/index.php?p=notas_credito&action=nueva&venta_id='.$anular_id);
+            exit;
+        }
+
+        $db->prepare("UPDATE ventas SET estado='anulado' WHERE id=?")->execute([$anular_id]);
+        // Descuenta de la caja abierta lo que esta venta había ingresado.
+        $tuvo_ingreso = (int)$db->query("SELECT COUNT(*) FROM movimientos_caja WHERE tipo='ingreso' AND venta_id=".$anular_id)->fetchColumn();
+        $egresos = registrarEgresoAnulacion($db, $anular_id, (int)$user['id'], 'Anulación');
+        if ($tuvo_ingreso > 0 && $egresos === 0) {
+            $_SESSION['flash_error'] = 'Venta anulada, pero NO se descontó de caja: no hay una caja abierta. Registra el egreso manualmente al abrir la próxima.';
+        }
         $msg='anulado'; $action='list';
     }
     if ($pa === 'cobrar') {
@@ -861,11 +878,17 @@ if (isset($_SESSION['flash_error'])) {
 
   <!-- ANULAR -->
   <?php if($venta_detalle['estado']==='pagado'): ?>
+  <?php if(!empty($venta_detalle['sunat_xml'])): ?>
+    <!-- Comprobante electrónico: ante SUNAT solo se da de baja con nota de crédito. -->
+    <a href="?p=notas_credito&action=nueva&venta_id=<?= $venta_detalle['id'] ?>"
+       class="btn btn-xs mb-2" style="color:var(--red);display:inline-flex">✕ Anular (nota de crédito)</a>
+  <?php else: ?>
   <form method="POST" class="mb-2" style="display:inline">
     <input type="hidden" name="action" value="anular">
     <input type="hidden" name="id" value="<?= $venta_detalle['id'] ?>">
     <button type="submit" class="btn btn-xs" style="color:var(--red)" onclick="return confirm('¿Anular este comprobante? Esta acción no se puede deshacer.')">✕ Anular comprobante</button>
   </form>
+  <?php endif; ?>
   <?php endif; ?>
 
   <!-- WHATSAPP CON URL -->
