@@ -80,6 +80,7 @@ $nav = [
   ['icon'=>'📦', 'label'=>'Inventario',       'page'=>'inventario',  'section'=>''],
   ['icon'=>'🛒', 'label'=>'Compras',           'page'=>'compras',     'section'=>''],
   ['icon'=>'🧾', 'label'=>'Facturación',      'page'=>'facturacion', 'section'=>'GESTIÓN'],
+  ['icon'=>'🧮', 'label'=>'Notas Créd./Déb.', 'page'=>'notas_credito','section'=>'', 'perm'=>'facturacion'],
   ['icon'=>'💰', 'label'=>'Caja',             'page'=>'caja',        'section'=>''],
   ['icon'=>'💳', 'label'=>'Reporte de Pagos', 'page'=>'reporte_pagos','section'=>''],
   ['icon'=>'📋', 'label'=>'Cuentas por cobrar', 'page'=>'cuentas','section'=>''],
@@ -236,8 +237,10 @@ $__vMob  = ($__cssDir && @filemtime("$__cssDir/mobile.css")) ? filemtime("$__css
   foreach ($nav as $item) {
     // Ocultar del menú los módulos que el rol no puede ver (admin ve todo).
     $pg = $item['page'] ?? '';
+    // 'perm' permite que un módulo se apoye en el permiso de otro (ej. notas de crédito → facturación).
+    $pg_perm = $item['perm'] ?? $pg;
     $_sin_check = ['_vet_toggle','portal','buscar','evolucion','whatsapp_conexion','triaje'];
-    if ($pg !== '' && !in_array($pg, $_sin_check, true) && function_exists('canView') && !canView($pg)) {
+    if ($pg !== '' && !in_array($pg, $_sin_check, true) && function_exists('canView') && !canView($pg_perm)) {
         continue;
     }
     // Sección
