@@ -1,10 +1,64 @@
 <?php
 $page = 'mascotas'; $pageTitle = 'Mascotas';
-require_once __DIR__ . '/../includes/header.php';
+// Cargar config (no el header todavía): así las acciones AJAX que devuelven JSON
+// —como la subida rápida de foto— pueden responder ANTES de imprimir el HTML.
+require_once __DIR__ . '/../includes/config.php';
+if (function_exists('requireLogin')) requireLogin();
 $db = getDB();
 
 $action = $_GET['action'] ?? 'list';
 $msg = '';
+$foto_error = '';
+
+/**
+ * Procesa $_FILES['foto'] para una mascota y devuelve ['foto'=>ruta|null,'error'=>msg].
+ * Reutilizable por el guardado del formulario y por la subida rápida del perfil.
+ */
+function vp_procesar_foto_mascota(PDO $db, $id) {
+    $out = ['foto'=>null, 'error'=>''];
+    if (empty($_FILES['foto']['tmp_name']) || (($_FILES['foto']['error'] ?? 1) !== UPLOAD_ERR_OK)) {
+        if (!empty($_FILES['foto']['name'])) $out['error']='No se pudo recibir la foto (código '.((int)($_FILES['foto']['error']??0)).'). Puede exceder el límite del servidor (post_max_size / upload_max_filesize).';
+        return $out;
+    }
+    // Detección robusta del tipo (algunos hostings deshabilitan mime_content_type)
+    $mime='';
+    if (function_exists('mime_content_type')) $mime=@mime_content_type($_FILES['foto']['tmp_name']);
+    if (!$mime || strncmp($mime,'image/',6)!==0) { $gi=@getimagesize($_FILES['foto']['tmp_name']); if($gi && !empty($gi['mime'])) $mime=$gi['mime']; }
+    if (!in_array($mime,['image/jpeg','image/png','image/webp','image/gif']) || $_FILES['foto']['size']>8*1024*1024) {
+        $out['error']='La imagen no es válida o supera 8MB (usa JPG, PNG o WEBP)'.($mime?" — tipo detectado: $mime":'').'.';
+        return $out;
+    }
+    $dir=UPLOADS_PATH.'/mascotas/';
+    if(!is_dir($dir)) @mkdir($dir,0755,true);
+    @chmod($dir,0755);
+    if ($id) { $old=$db->prepare("SELECT foto FROM mascotas WHERE id=?"); $old->execute([$id]); $o=$old->fetch(); if($o && !empty($o['foto']) && file_exists(UPLOADS_PATH.'/'.$o['foto'])) @unlink(UPLOADS_PATH.'/'.$o['foto']); }
+    $base='mascota_'.($id?:time()).'_'.uniqid();
+    @ini_set('memory_limit','256M');
+    $foto=null;
+    if (function_exists('imagecreatefromstring')) {
+        $src=@imagecreatefromstring(file_get_contents($_FILES['foto']['tmp_name']));
+        if($src){
+            $fname=$base.'.jpg'; // se reconvierte SIEMPRE a JPEG
+            $w=imagesx($src);$h=imagesy($src);$max=400;$nw=$w;$nh=$h;
+            if($w>$max||$h>$max){$r=$w>$h?$max/$w:$max/$h;$nw=(int)round($w*$r);$nh=(int)round($h*$r);}
+            $dst=imagecreatetruecolor($nw,$nh);
+            imagefilledrectangle($dst,0,0,$nw,$nh,imagecolorallocate($dst,255,255,255)); // fondo blanco
+            imagecopyresampled($dst,$src,0,0,0,0,$nw,$nh,$w,$h);
+            @imagejpeg($dst,$dir.$fname,90);imagedestroy($src);imagedestroy($dst);
+            if(file_exists($dir.$fname) && filesize($dir.$fname)>0){ @chmod($dir.$fname,0644); $foto='mascotas/'.$fname; }
+            elseif(file_exists($dir.$fname)) @unlink($dir.$fname);
+        }
+    }
+    if(!$foto){ // Sin GD o falló el redimensionado: guardar el original
+        $ext=$mime==='image/png'?'png':($mime==='image/webp'?'webp':($mime==='image/gif'?'gif':'jpg'));
+        $fname=$base.'.'.$ext;
+        if(move_uploaded_file($_FILES['foto']['tmp_name'],$dir.$fname)){ @chmod($dir.$fname,0644); $foto='mascotas/'.$fname; }
+    }
+    if(!$foto) $out['error']='No se pudo escribir la foto. Revisa que la carpeta public/uploads/mascotas tenga permiso de escritura (755/775).';
+    $out['foto']=$foto;
+    if($out['error']) @error_log('[VetPro mascotas] foto: '.$out['error']);
+    return $out;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Especies gestionables (agregar / eliminar) — igual que tipos de vacuna
@@ -77,22 +131,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if (!empty($data['especie'])) $data['especie']=strtolower($data['especie']);
         // Asignar sede activa al crear mascota nueva
         $data['sede_id'] = getSede();
-        $foto_nueva=null;
-        if (!empty($_FILES['foto']['tmp_name']) && $_FILES['foto']['error']===UPLOAD_ERR_OK) {
-            $mime=mime_content_type($_FILES['foto']['tmp_name']);
-            if (in_array($mime,['image/jpeg','image/png','image/webp','image/gif']) && $_FILES['foto']['size']<=5*1024*1024) {
-                $dir=UPLOADS_PATH.'/mascotas/';
-                if(!is_dir($dir)) mkdir($dir,0755,true);
-                if ($id) { $old=$db->prepare("SELECT foto FROM mascotas WHERE id=?"); $old->execute([$id]); $oldrow=$old->fetch(); if($oldrow&&$oldrow['foto']&&file_exists(UPLOADS_PATH.'/'.$oldrow['foto'])) unlink(UPLOADS_PATH.'/'.$oldrow['foto']); }
-                $ext=$mime==='image/png'?'png':($mime==='image/webp'?'webp':'jpg');
-                $fname='mascota_'.($id?:time()).'_'.uniqid().'.'.$ext;
-                if (function_exists('imagecreatefromstring')) {
-                    $src=imagecreatefromstring(file_get_contents($_FILES['foto']['tmp_name']));
-                    if($src){$w=imagesx($src);$h=imagesy($src);$max=120;$nw=$w;$nh=$h;if($w>$max||$h>$max){$r=$w>$h?$max/$w:$max/$h;$nw=round($w*$r);$nh=round($h*$r);}$dst=imagecreatetruecolor($nw,$nh);imagecopyresampled($dst,$src,0,0,0,0,$nw,$nh,$w,$h);imagejpeg($dst,$dir.$fname,90);imagedestroy($src);imagedestroy($dst);$foto_nueva='mascotas/'.$fname;}
-                }
-                if(!$foto_nueva && move_uploaded_file($_FILES['foto']['tmp_name'],$dir.$fname)) $foto_nueva='mascotas/'.$fname;
-            }
-        }
+        $_fr = vp_procesar_foto_mascota($db, $id);
+        $foto_nueva = $_fr['foto']; if ($_fr['error']) $foto_error = $_fr['error'];
         // Agregar columnas extra si no existen (MariaDB 10.5 compatible)
         foreach(['grupo_sanguineo VARCHAR(10)','personalidad VARCHAR(200)','esterilizado TINYINT(1) DEFAULT 0','microchip TINYINT(1) DEFAULT 0','alimentacion TEXT','observaciones TEXT','sede_id INT DEFAULT 1'] as $col) {
             $colname = explode(' ', trim($col))[0];
@@ -145,10 +185,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $db->prepare("UPDATE mascotas SET foto=NULL WHERE id=?")->execute([$id]);
         header('Content-Type: application/json'); echo json_encode(['ok'=>true]); exit;
     }
+    // Subida rápida de foto (botón "Cambiar" del perfil): SOLO actualiza la columna foto,
+    // sin tocar los demás campos (antes mandaba la foto sin dueño/especie y el UPDATE fallaba).
+    if ($pa==='update_foto') {
+        $id=(int)($_POST['id']??0);
+        $_fr = vp_procesar_foto_mascota($db, $id);
+        if ($id && $_fr['foto']) $db->prepare("UPDATE mascotas SET foto=? WHERE id=?")->execute([$_fr['foto'],$id]);
+        header('Content-Type: application/json');
+        echo json_encode(['ok'=>(bool)$_fr['foto'], 'foto'=>$_fr['foto'], 'error'=>$_fr['error']]);
+        exit;
+    }
 }
 if ($action==='delete' && isset($_GET['id'])) {
     $db->prepare("UPDATE mascotas SET estado='dado_en_adopcion' WHERE id=?")->execute([(int)$_GET['id']]); $action='list';
 }
+
+// Recién aquí imprimimos la página (las acciones AJAX que devuelven JSON ya salieron con exit)
+require_once __DIR__ . '/../includes/header.php';
 
 $clientes_sel=$db->query("SELECT id,nombre,telefono FROM clientes WHERE activo=1 ORDER BY nombre")->fetchAll();
 // Especies desde la base de datos (gestionables). Se mantiene un respaldo por si la tabla falla.
@@ -157,12 +210,22 @@ $especie_labels=[];
 try {
     $_esp_todas = $db->query("SELECT nombre,icono,estado FROM especies ORDER BY estado,nombre")->fetchAll();
     foreach ($_esp_todas as $_e) {
-        $especie_icons[$_e['nombre']] = $_e['icono'] ?: '🐾';
+        // Usar el ícono de la BD SOLO para especies nuevas (las que no tienen emoji
+        // por defecto en el código) y solo si el emoji guardado es válido. Así, si un
+        // emoji quedó corrupto en la base ("??"), no reemplaza al ícono bueno del código.
+        $_ic = trim((string)($_e['icono'] ?? ''));
+        $_ic_valido = ($_ic !== '' && strpos($_ic,'?')===false && strpos($_ic,'�')===false && preg_match('//u',$_ic));
+        if (!isset($especie_icons[$_e['nombre']]) && $_ic_valido) {
+            $especie_icons[$_e['nombre']] = $_ic;
+        }
         if ($_e['estado']==='activo') $especie_labels[$_e['nombre']] = ucfirst($_e['nombre']);
     }
 } catch (Exception $e) {}
 // Respaldo si no hay especies activas cargadas
 if (empty($especie_labels)) $especie_labels=['perro'=>'Perro','gato'=>'Gato','conejo'=>'Conejo','ave'=>'Ave','reptil'=>'Reptil','roedor'=>'Roedor','otro'=>'Otro'];
+
+// Aviso si la mascota se guardó pero la foto no (para no fallar en silencio)
+if (!empty($foto_error)) echo '<div class="alert alert-warn mb-2" style="max-width:700px">⚠️ La mascota se guardó, pero la foto no se pudo adjuntar: '.htmlspecialchars($foto_error).'</div>';
 
 // ── VER perfil completo de mascota (imagen 2) ──
 if ($action==='ver' && isset($_GET['id'])) {
@@ -170,6 +233,14 @@ if ($action==='ver' && isset($_GET['id'])) {
     $st=$db->prepare("SELECT m.*,c.nombre as dueno,c.telefono,c.email,c.dni FROM mascotas m JOIN clientes c ON c.id=m.cliente_id WHERE m.id=?");
     $st->execute([$mid]); $m=$st->fetch();
     if (!$m) { $action='list'; goto list_view; }
+    // Token del carné de vacunación (QR público). Se genera una sola vez por mascota.
+    $carne_token = $m['carne_token'] ?? '';
+    try {
+        $col = $db->query("SHOW COLUMNS FROM mascotas LIKE 'carne_token'")->fetchAll();
+        if (empty($col)) { $db->exec("ALTER TABLE mascotas ADD COLUMN carne_token VARCHAR(40) NULL"); try{ $db->exec("CREATE INDEX idx_carne_token ON mascotas (carne_token)"); }catch(Exception $e){} }
+        if (empty($carne_token)) { $carne_token = bin2hex(random_bytes(16)); $db->prepare("UPDATE mascotas SET carne_token=? WHERE id=?")->execute([$carne_token,$mid]); }
+    } catch(Exception $e) { $carne_token=''; }
+    $carne_url = BASE_URL.'/carne.php?t='.$carne_token;
     $foto_url = !empty($m['foto'])&&file_exists(UPLOADS_PATH.'/'.$m['foto']) ? BASE_URL.'/public/uploads/'.$m['foto'] : null;
     // Historial actividad reciente
     $actividad=$db->prepare("
@@ -183,6 +254,9 @@ if ($action==='ver' && isset($_GET['id'])) {
     // Stats
     $n_consultas=$db->prepare("SELECT COUNT(*) FROM consultas WHERE mascota_id=?");$n_consultas->execute([$mid]);$n_consultas=(int)$n_consultas->fetchColumn();
     $n_vacunas=$db->prepare("SELECT COUNT(*) FROM vacunas WHERE mascota_id=?");$n_vacunas->execute([$mid]);$n_vacunas=(int)$n_vacunas->fetchColumn();
+    // Historial de peso (para la curva de crecimiento) — de cada consulta con peso registrado
+    $peso_hist=[];
+    try { $ph=$db->prepare("SELECT fecha, peso_actual FROM consultas WHERE mascota_id=? AND peso_actual IS NOT NULL AND peso_actual>0 ORDER BY fecha ASC, id ASC"); $ph->execute([$mid]); $peso_hist=$ph->fetchAll(); } catch(Exception $e){ $peso_hist=[]; }
     try{$n_examenes=$db->prepare("SELECT COUNT(*) FROM examenes_auxiliares WHERE mascota_id=?");$n_examenes->execute([$mid]);$n_examenes=(int)$n_examenes->fetchColumn();}catch(Exception $e){$n_examenes=0;}
     // Próximas acciones
     $prox_cita=$db->prepare("SELECT * FROM citas WHERE mascota_id=? AND fecha>=CURDATE() AND estado IN ('pendiente','confirmada') ORDER BY fecha ASC LIMIT 1");$prox_cita->execute([$mid]);$prox_cita=$prox_cita->fetch();
@@ -315,6 +389,7 @@ try{$n_hosp=$db->prepare("SELECT COUNT(*) FROM hospitalizaciones WHERE mascota_i
         <a href="<?= BASE_URL ?>/index.php?p=citas&action=nueva" class="mas-dmenu-item">📅 Agendar cita</a>
         <a href="<?= BASE_URL ?>/index.php?p=vacunas&action=nueva&mascota_id=<?= $m['id'] ?>" class="mas-dmenu-item">💉 Registrar vacuna</a>
         <a href="<?= BASE_URL ?>/index.php?p=examenes&action=nuevo&mascota_id=<?= $m['id'] ?>" class="mas-dmenu-item">🔬 Nuevo examen</a>
+        <?php if(!empty($carne_token)): ?><a href="<?= $carne_url ?>" target="_blank" class="mas-dmenu-item">🪪 Carné de vacunación (QR)</a><?php endif; ?>
         <a href="https://wa.me/<?= $tel ?>" target="_blank" class="mas-dmenu-item">💬 WhatsApp dueño</a>
       </div>
     </div>
@@ -421,6 +496,52 @@ try{$n_hosp=$db->prepare("SELECT COUNT(*) FROM hospitalizaciones WHERE mascota_i
             <div class="mas-field"><span class="mas-field-label">Alimentación</span><span class="mas-field-val" style="max-width:120px;text-align:right"><?= clean($m['alimentacion']??'—') ?></span></div>
           </div>
         </div>
+        <!-- Curva de peso / crecimiento -->
+        <div class="mas-sec-title" style="margin-top:4px">📈 Curva de peso</div>
+        <?php if(count($peso_hist) < 1): ?>
+          <div style="text-align:center;padding:16px;color:var(--text3);font-size:12px;background:var(--bg2);border:1px dashed var(--border);border-radius:12px;margin-bottom:14px">
+            Aún no hay pesos registrados en consultas. La curva se dibuja sola a medida que registres atenciones con peso.
+          </div>
+        <?php else:
+          $pw = array_map(fn($r)=>(float)$r['peso_actual'], $peso_hist);
+          $n = count($pw);
+          $minW = min($pw); $maxW = max($pw);
+          $first = $pw[0]; $last = $pw[$n-1]; $delta = $last - $first;
+          $range = ($maxW - $minW); if($range <= 0){ $range = max(0.1, $maxW*0.1); }
+          $ymin = $minW - $range*0.15; if($ymin < 0) $ymin = 0; $ymax = $maxW + $range*0.15;
+          if($ymax <= $ymin) $ymax = $ymin + 0.1;
+          $W=600;$H=190;$padL=42;$padR=14;$padT=14;$padB=30;
+          $plotW=$W-$padL-$padR; $plotH=$H-$padT-$padB;
+          $fmt = fn($v)=>rtrim(rtrim(number_format($v,3,'.',''),'0'),'.');
+          $X = fn($i)=>$padL + ($n>1 ? $i*($plotW/($n-1)) : $plotW/2);
+          $Y = fn($v)=>$padT + (1-(($v-$ymin)/($ymax-$ymin)))*$plotH;
+          $pts=[]; foreach($pw as $i=>$v){ $pts[]=round($X($i),1).','.round($Y($v),1); }
+          $poly=implode(' ',$pts);
+          $dc = $delta>0?['#065f46','#d1fae5','▲']:($delta<0?['#7f1d1d','#fee2e2','▼']:['#475569','#f1f5f9','=']);
+        ?>
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px 10px 6px;margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;padding:0 6px 6px;flex-wrap:wrap;gap:6px">
+            <div><span style="font-size:22px;font-weight:800;color:var(--text)"><?= $fmt($last) ?></span> <span style="font-size:12px;color:var(--text3)">kg (último)</span></div>
+            <div><span class="badge" style="background:<?= $dc[1] ?>;color:<?= $dc[0] ?>"><?= $dc[2] ?> <?= ($delta>0?'+':'').$fmt($delta) ?> kg</span>
+              <span style="font-size:11px;color:var(--text3);margin-left:4px"><?= $n ?> registro<?= $n>1?'s':'' ?></span></div>
+          </div>
+          <svg viewBox="0 0 <?= $W ?> <?= $H ?>" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
+            <?php foreach([$ymax,($ymax+$ymin)/2,$ymin] as $gl){ $gy=round($Y($gl),1); ?>
+            <line x1="<?= $padL ?>" y1="<?= $gy ?>" x2="<?= $W-$padR ?>" y2="<?= $gy ?>" stroke="var(--border)" stroke-width="1" stroke-dasharray="3 3"/>
+            <text x="<?= $padL-6 ?>" y="<?= $gy+3 ?>" text-anchor="end" font-size="10" fill="var(--text3)"><?= $fmt($gl) ?></text>
+            <?php } ?>
+            <?php if($n>1): ?><polyline points="<?= $poly ?>" fill="none" stroke="#0ea5a4" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/><?php endif; ?>
+            <?php foreach($pw as $i=>$v){ $cx=round($X($i),1);$cy=round($Y($v),1); $isLast=($i===$n-1); ?>
+            <circle cx="<?= $cx ?>" cy="<?= $cy ?>" r="<?= $isLast?4.5:3.5 ?>" fill="<?= $isLast?'#0369a1':'#0ea5a4' ?>" stroke="#fff" stroke-width="1.5"/>
+            <?php } ?>
+            <?php $labels=[0=>$peso_hist[0]['fecha'], $n-1=>$peso_hist[$n-1]['fecha']]; if($n>=5){ $mid=intdiv($n-1,2); $labels[$mid]=$peso_hist[$mid]['fecha']; }
+              foreach($labels as $i=>$f){ $tx=round($X($i),1); $anchor=$i==0?'start':($i==$n-1?'end':'middle'); ?>
+            <text x="<?= $tx ?>" y="<?= $H-8 ?>" text-anchor="<?= $anchor ?>" font-size="10" fill="var(--text3)"><?= date('d/m/y',strtotime($f)) ?></text>
+            <?php } ?>
+          </svg>
+        </div>
+        <?php endif; ?>
+
         <!-- Alertas médicas -->
         <?php if($m['alergias']): ?>
         <div class="alert alert-warn mb-2"><span class="alert-icon">⚠️</span><div><strong>Alergias:</strong> <?= clean($m['alergias']) ?></div></div>
@@ -560,6 +681,7 @@ try{$n_hosp=$db->prepare("SELECT COUNT(*) FROM hospitalizaciones WHERE mascota_i
         <a href="<?= BASE_URL ?>/index.php?p=citas&action=nueva" class="mas-dmenu-item">📅 Agendar cita</a>
         <a href="<?= BASE_URL ?>/index.php?p=vacunas&action=nueva&mascota_id=<?= $m['id'] ?>" class="mas-dmenu-item">💉 Registrar vacuna</a>
         <a href="<?= BASE_URL ?>/index.php?p=examenes&action=nuevo&mascota_id=<?= $m['id'] ?>" class="mas-dmenu-item">🔬 Nuevo examen</a>
+        <?php if(!empty($carne_token)): ?><a href="<?= $carne_url ?>" target="_blank" class="mas-dmenu-item">🪪 Carné de vacunación (QR)</a><?php endif; ?>
         <a href="https://wa.me/<?= $tel ?>" target="_blank" class="mas-dmenu-item">💬 WhatsApp dueño</a>
       </div>
     </div>
@@ -664,11 +786,18 @@ document.addEventListener('click', () => {
 async function uploadFoto(input, id) {
     if (!input.files[0]) return;
     const fd = new FormData();
-    fd.append('action','save'); fd.append('id',id);
+    fd.append('action','update_foto'); fd.append('id',id);
     fd.append('foto',input.files[0]);
-    fd.append('mascota_id',id);
-    const r = await fetch(window.location.href, {method:'POST', body:fd});
-    location.reload();
+    try {
+        const r = await fetch(window.location.href, {method:'POST', body:fd});
+        const txt = await r.text();
+        let d = null; try { d = JSON.parse(txt); } catch(e) { /* respuesta con HTML extra */ }
+        // Éxito si el servidor respondió 200 y no marcó error explícito
+        if (r.ok && (!d || d.ok !== false)) { location.reload(); return; }
+        alert((d && d.error) ? d.error : 'No se pudo guardar la foto. Inténtalo de nuevo.');
+    } catch(e) {
+        alert('No se pudo guardar la foto (error de red).');
+    }
 }
 </script>
 
